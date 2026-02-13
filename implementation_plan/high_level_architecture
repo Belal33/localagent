@@ -1,0 +1,36 @@
++-----------------------------------------------------------------------------------+
+|                         CLIENT TIER (Next.js Frontend)                            |
+|  - Chat UI (React / Tailwind)                                                     |
+|  - Agent State Visualizer (Streaming events via Vercel AI SDK / WebSockets)       |
++----------------------------------------+------------------------------------------+
+                                         | 
++----------------------------------------v------------------------------------------+
+|                       ORCHESTRATION TIER (Next.js Backend)                        |
+|                                                                                   |
+|  +-----------------------+      +----------------------------------------------+  |
+|  | Cognitive Engine      |      | Hybrid Memory Subsystem (GraphRAG)           |  |
+|  | (LangGraph.js)        |<---->|  - Vector DB (Episodic / Semantic Search)    |  |
+|  |  - State Management   |      |  - Graph DB (Relational / Knowledge Graph)   |  |
+|  |  - ReAct Loop         |      +----------------------------------------------+  |
+|  +-----------+-----------+                                                        |
+|              |                  +----------------------------------------------+  |
+|  +-----------v-----------+      | Model Context Protocol (MCP) Client          |  |
+|  | Local Inference API   |<---->|  - Formats LLM tool calls into MCP RPC calls |  |
+|  | (Ollama / vLLM)       |      +-----------------------+----------------------+  |
++---------------------------------------------------------|-------------------------+
+                                                          |
+================= STRICT LINUX SECURITY BOUNDARY (sudo privilege drop) ==============
+                                                          |
++---------------------------------------------------------v-------------------------+
+|                      SANDBOXED EXECUTION TIER (Ubuntu Linux)                      |
+|                                                                                   |
+|  [ Process Owner: `agent_worker` (Restricted User without sudo privileges) ]      |
+|                                                                                   |
+|  +-----------------------------------------------------------------------------+  |
+|  | Local MCP Tool Server (Node.js script)                                      |  |
+|  |   - Web Search Tool (DuckDuckGo/SearXNG API)                                |  |
+|  |   - File System Tool (CRUD operations bounded strictly to ~/workspace)      |  |
+|  |   - Terminal Tool (Subprocess bash execution with timeout limits)           |  |
+|  |   - Download Tool (Resource fetching via cURL/wget)                         |  |
+|  +-----------------------------------------------------------------------------+  |
++-----------------------------------------------------------------------------------+
