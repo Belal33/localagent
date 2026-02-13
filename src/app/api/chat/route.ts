@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { agentGraph } from "@/lib/agent/graph";
 
-// Allow longer execution times for local inference
+// Allow longer execution times for local inference + tool execution
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
@@ -14,13 +14,9 @@ export async function POST(req: NextRequest) {
         console.log("Raw messages received:", JSON.stringify(messages, null, 2));
 
         // Convert incoming messages to LangChain format
-        // AI SDK v6 TextStreamChatTransport sends messages with:
-        //   { role: "user"|"assistant", content: string, parts: [...] }
-        // We need to safely extract the text content
         const langchainMessages = messages
             .filter((m: Record<string, unknown>) => m != null)
             .map((m: Record<string, unknown>) => {
-                // Extract text content: try 'content' first, then fall back to 'parts'
                 let text = "";
                 if (typeof m.content === "string") {
                     text = m.content;
@@ -48,7 +44,6 @@ export async function POST(req: NextRequest) {
         );
 
         // Create a plain text ReadableStream
-        // TextStreamChatTransport on the client expects raw text chunks
         const encoder = new TextEncoder();
         let isClosed = false;
 
@@ -60,8 +55,21 @@ export async function POST(req: NextRequest) {
 
                         // Filter for LLM token generation events
                         if (event === "on_chat_model_stream" && data.chunk?.content) {
-                            const textChunk = data.chunk.content;
-                            if (typeof textChunk === "string" && textChunk.length > 0) {
+                            const rawContent = data.chunk.content;
+                            let textChunk = "";
+
+                            if (typeof rawContent === "string") {
+                                // Ollama / simple providers return plain strings
+                                textChunk = rawContent;
+                            } else if (Array.isArray(rawContent)) {
+                                // Anthropic returns content blocks: [{type: "text", text: "..."}]
+                                textChunk = rawContent
+                                    .filter((block: any) => block.type === "text" && block.text)
+                                    .map((block: any) => block.text)
+                                    .join("");
+                            }
+
+                            if (textChunk.length > 0) {
                                 controller.enqueue(encoder.encode(textChunk));
                             }
                         }

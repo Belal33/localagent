@@ -67,12 +67,12 @@ export default function AgentInterface() {
               <TerminalSquare size={22} className="text-emerald-500" />
               Local AI Core
               <span className="text-xs font-normal tracking-wide text-neutral-500 bg-neutral-800 px-2 py-0.5 rounded-full">
-                Phase 1
+                Phase 2
               </span>
             </h1>
             <p className="text-xs text-neutral-500 mt-1 flex items-center gap-2">
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Engine: LangGraph + Ollama (deepseek-r1:7b)
+              Engine: LangGraph + Ollama + MCP Tools
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs text-neutral-600">

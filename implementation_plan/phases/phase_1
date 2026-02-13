@@ -1,275 +1,67 @@
-Here is your **Phase 1 Implementation Plan: Core Scaffolding**.
+# Phase 1: Core Scaffolding ✅ COMPLETE
 
-In this phase, we are establishing the foundational architecture. We will intentionally skip the OS-level sandboxing and tools for now. By the end of this phase, you will have a Next.js application hooked up to a local Ollama model, orchestrated by a highly extensible **LangGraph.js state machine** with built-in thread memory, and a modern streaming chat UI.
-
-Building the graph architecture *now* guarantees that when we inject the Linux tools in Phase 2, the routing logic and state management are already perfectly in place.
+This phase established the foundational architecture: a Next.js application with a LangGraph.js state machine, streaming chat UI, and LLM integration.
 
 ---
 
-### Step 1: Ubuntu Infrastructure & Local Inference Setup
+### Step 1: Ubuntu Infrastructure & LLM Setup
 
-Before writing any Next.js code, we need to stand up the local inference engine on your Ubuntu machine. We will use `Qwen-2.5-Coder` (or `Llama-3.1`), as they are the current state-of-the-art open weights for reliable tool-calling and reasoning.
-
-Open your Ubuntu terminal:
+Installed Ollama on the host system for local inference.
 
 ```bash
-# 1. Install Ollama on your host OS
 curl -fsSL https://ollama.com/install.sh | sh
-
-# 2. Ensure the Ollama service is running
 sudo systemctl enable ollama
 sudo systemctl start ollama
-
-# 3. Pull the primary reasoning model
-# Recommendation: qwen2.5-coder:7b (excellent for programming and terminal tasks)
-ollama pull qwen2.5-coder:7b
-
+ollama pull deepseek-r1:7b
 ```
+
+**Note:** Ollama was later replaced with the Anthropic SDK pointing at a local Antigravity Claude Proxy (port 8080) for better tool-calling support. The proxy exposes any model as an Anthropic-compatible endpoint.
 
 ---
 
 ### Step 2: Next.js Initialization & Dependencies
 
-Bootstrap the frontend and backend orchestration tier. We will use the latest Next.js App Router and install the Vercel AI SDK for UI streaming, alongside the LangGraph ecosystem.
-
 ```bash
-# Initialize Next.js (Select App Router, TypeScript, Tailwind CSS, and src/ directory)
 npx create-next-app@latest local-ai-agent
 cd local-ai-agent
 
-# Install LangChain & LangGraph Orchestration libraries
+# LangChain & LangGraph
 npm install @langchain/core @langchain/langgraph @langchain/ollama
 
-# Install Vercel AI SDK for Frontend Streaming Hooks
+# Frontend streaming
 npm install ai @ai-sdk/react lucide-react
-
 ```
+
+**Later additions:** `@langchain/anthropic` (for proxy integration), `@modelcontextprotocol/sdk` and `zod` (for MCP — later deprecated in favor of direct skills).
 
 ---
 
-### Step 3: Architecting the LangGraph FSM (Cognitive Engine)
+### Step 3: LangGraph Finite State Machine
 
-We are going to define the agent as a Finite State Machine. In Phase 1, the graph is a simple loop (`START -> agent -> END`), but because it extends `MessagesAnnotation`, injecting an MCP "Tools" node in Phase 2 will require changing just one line of routing logic.
+Created `src/lib/agent/graph.ts` — a basic `START → agent → END` state machine using `MessagesAnnotation` and `MemorySaver` checkpointer for thread memory.
 
-Create a new directory and file at **`src/lib/agent/graph.ts`**:
-
-```typescript
-import { StateGraph, MessagesAnnotation, MemorySaver } from "@langchain/langgraph";
-import { ChatOllama } from "@langchain/ollama";
-import { SystemMessage } from "@langchain/core/messages";
-
-// 1. Initialize the Local LLM natively interacting with Ollama
-const llm = new ChatOllama({
-  model: "qwen2.5-coder:7b", // Must match the model you pulled
-  baseUrl: "http://localhost:11434", // Default Ubuntu Ollama port
-  temperature: 0.1, // Low temperature is critical for deterministic agent behavior later
-});
-
-// 2. Define the Agent Node
-async function callModel(state: typeof MessagesAnnotation.State) {
-  const { messages } = state;
-  
-  // Prepend the system prompt dynamically
-  const systemPrompt = new SystemMessage(
-    "You are a highly capable autonomous AI agent running natively on an Ubuntu system. " +
-    "You are currently in Phase 1 of your initialization. Be concise, helpful, and acknowledge your local environment."
-  );
-  
-  // The LLM processes the system prompt + conversation history
-  const response = await llm.invoke([systemPrompt, ...messages]);
-  
-  // Return the new message. LangGraph's reducer automatically appends it to the state.
-  return { messages: [response] };
-}
-
-// 3. Construct the Finite State Machine (Graph)
-const workflow = new StateGraph(MessagesAnnotation)
-  .addNode("agent", callModel)
-  .addEdge("__start__", "agent")
-  .addEdge("agent", "__end__"); // In Phase 2, this edge will conditionally route to the Tool Node
-
-// 4. Initialize Short-Term Memory
-// We use MemorySaver for Phase 1. In Phase 4, we will swap this with PostgresSaver/pgvector.
-const checkpointer = new MemorySaver();
-
-// Compile into a runnable application
-export const agentGraph = workflow.compile({ checkpointer });
-
-```
+**Current state (after Phase 2):** The graph now implements a full ReAct loop (`START → agent ⇄ tools → END`) with tools bound via `bindTools()`, using the Anthropic SDK.
 
 ---
 
-### Step 4: Next.js API Route (The Streaming Bridge)
+### Step 4: Streaming API Route
 
-We need an API route to handle incoming HTTP requests from the React frontend, pass them into LangGraph, and stream the generated LLM tokens back to the UI seamlessly. We will transform LangGraph's complex event stream into the standard Vercel AI SDK text stream format.
+Created `src/app/api/chat/route.ts` — handles incoming messages from the React frontend, passes them into LangGraph, and streams tokens back via a `ReadableStream`.
 
-Create a new file at **`src/app/api/chat/route.ts`**:
-
-```typescript
-import { NextRequest } from "next/server";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { agentGraph } from "@/lib/agent/graph";
-
-// Allow longer execution times for local inference
-export const maxDuration = 60; 
-
-export async function POST(req: NextRequest) {
-  try {
-    const { messages, threadId } = await req.json();
-
-    // 1. Convert Vercel AI SDK message format to LangChain message classes
-    const langchainMessages = messages.map((m: any) =>
-      m.role === "user" ? new HumanMessage(m.content) : new AIMessage(m.content)
-    );
-
-    // 2. Configure the thread ID for memory persistence
-    const config = { configurable: { thread_id: threadId || "dev_thread_001" } };
-
-    // 3. Execute the Graph and listen for real-time streaming events
-    const eventStream = await agentGraph.streamEvents(
-      { messages: langchainMessages },
-      { ...config, version: "v2" }
-    );
-
-    // 4. Create a ReadableStream to pipe the tokens back to the client
-    const stream = new ReadableStream({
-      async start(controller) {
-        for await (const { event, data } of eventStream) {
-          // Isolate the specific event where the LLM is generating text
-          if (event === "on_chat_model_stream" && data.chunk?.content) {
-            const textChunk = data.chunk.content;
-            // Format chunks using the Vercel AI SDK Data Stream protocol
-            controller.enqueue(new TextEncoder().encode(`0:${JSON.stringify(textChunk)}\n`));
-          }
-        }
-        controller.close();
-      },
-    });
-
-    return new Response(stream, {
-      headers: { 
-        "Content-Type": "text/x-unknown",
-        "x-vercel-ai-data-stream": "v1" 
-      },
-    });
-  } catch (error: any) {
-    console.error("Agent execution error:", error);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
-  }
-}
-
-```
+**Key streaming logic:** Filters for `on_chat_model_stream` events and handles both string content (Ollama format) and content block arrays (Anthropic format).
 
 ---
 
 ### Step 5: Frontend Chat UI
 
-Finally, construct the Client Component. The `@ai-sdk/react` package handles all state management and stream chunk concatenation automatically, saving us from writing tedious WebSocket or text-parsing logic.
+Created `src/app/page.tsx` — a dark-themed terminal-style chat interface using React, Lucide icons, and the Vercel AI SDK `useChat` hook for automatic stream management.
 
-Replace the contents of **`src/app/page.tsx`**:
-
-```tsx
-"use client";
-
-import { useChat } from "@ai-sdk/react";
-import { useEffect, useRef, useState } from "react";
-import { Send, TerminalSquare, User } from "lucide-react";
-
-export default function AgentInterface() {
-  // Generate a mock thread ID so LangGraph remembers context across messages in this session
-  const [threadId] = useState(() => Math.random().toString(36).substring(7));
-  
-  const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat({
-    api: "/api/chat",
-    body: { threadId }, // Pass the thread ID to our API route
-  });
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // Auto-scroll to bottom as tokens stream in
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  return (
-    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-50 font-mono">
-      {/* Header */}
-      <header className="py-4 px-6 border-b border-neutral-800 bg-neutral-900 shadow-md">
-        <h1 className="text-xl font-bold text-emerald-400 flex items-center gap-2">
-          <TerminalSquare size={24} />
-          Local AI Core [Phase 1]
-        </h1>
-        <p className="text-xs text-neutral-500 mt-1">Status: Online | Engine: LangGraph + Ollama</p>
-      </header>
-
-      {/* Chat Transcript Area */}
-      <main className="flex-1 overflow-y-auto p-6 space-y-6">
-        {messages.length === 0 && (
-          <div className="text-neutral-500 italic text-center mt-10">
-            System Initialized. Awaiting input.
-          </div>
-        )}
-        
-        {messages.map((m) => (
-          <div key={m.id} className={`flex gap-3 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            {m.role !== "user" && <TerminalSquare className="mt-1 text-emerald-500 shrink-0" size={20} />}
-            <div className={`max-w-[80%] rounded-lg p-4 ${
-              m.role === "user" 
-                ? "bg-neutral-800 text-neutral-200" 
-                : "bg-emerald-950/30 text-emerald-100 border border-emerald-900/50"
-            }`}>
-              <div className="whitespace-pre-wrap leading-relaxed">{m.content}</div>
-            </div>
-            {m.role === "user" && <User className="mt-1 text-blue-400 shrink-0" size={20} />}
-          </div>
-        ))}
-        {isLoading && (
-          <div className="flex items-center gap-2 text-emerald-500 text-sm animate-pulse">
-            <TerminalSquare size={16} /> Computing response...
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </main>
-
-      {/* Input Area */}
-      <footer className="p-4 border-t border-neutral-800 bg-neutral-900">
-        <form onSubmit={handleSubmit} className="flex gap-2 max-w-4xl mx-auto">
-          <input
-            className="flex-1 bg-neutral-950 border border-neutral-800 rounded-lg px-4 py-3 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all text-sm"
-            value={input}
-            onChange={handleInputChange}
-            placeholder="Initialize command sequence..."
-            disabled={isLoading}
-          />
-          <button 
-            type="submit" 
-            disabled={isLoading || !input.trim()}
-            className="bg-emerald-600 hover:bg-emerald-500 text-neutral-950 px-6 py-3 rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            <Send size={18} /> Send
-          </button>
-        </form>
-      </footer>
-    </div>
-  );
-}
-
-```
+**Current state:** Updated to "Phase 2" badge, now uses direct text input management instead of AI SDK's built-in input handling (fixed in a follow-up session).
 
 ---
 
-### Success Criteria & Verification for Phase 1
+### Verification Results ✅
 
-1. Start your local dev server:
-```bash
-npm run dev
-
-```
-
-
-2. Open `http://localhost:3000`.
-3. Type a multi-part instruction, for example: *"Hello, my name is Alex. What is a Finite State Machine?"*
-4. You should see a highly responsive, token-by-token stream arriving from your local Ollama instance.
-5. **Test Context Memory:** Follow up with *"What did I say my name was?"* The agent should accurately reply with "Alex", proving that LangGraph's `MemorySaver` checkpointer is properly retaining thread history.
-
-Once you have verified that the baseline LLM orchestration is functioning perfectly and retaining memory, let me know. We will then proceed to **Phase 2: Dropping OS Privileges, Sandboxing the Ubuntu Workspace, and integrating Model Context Protocol (MCP) Tools** natively into the LangGraph state machine.
+1. `npm run build` — compiles with zero errors
+2. Chat UI streams tokens in real-time
+3. Thread memory works across messages (tested with name recall)

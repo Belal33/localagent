@@ -1,207 +1,102 @@
-As a Senior AI Systems Architect, I commend your transition from building standard conversational wrappers to developing a truly autonomous, locally hosted agent. This represents the cutting edge of AI engineering. To achieve true autonomy while maintaining system integrity on a host OS, we must abandon naive "chain-of-thought" loops and adopt a deterministic state-machine architecture with stringent, OS-level security boundaries.
-
-Here is your comprehensive architectural blueprint, competitive analysis, and technical roadmap for building this Next.js-based agent on Ubuntu Linux.
+This is the master architectural blueprint for building a locally hosted, autonomous AI agent on Ubuntu Linux using Next.js.
 
 ---
 
 ### 1. Competitive Analysis & Orchestration Strategy
 
-Before designing our system, we must analyze the evolution of open-source autonomous agents to adopt best practices and avoid their architectural pitfalls:
-
-* **Generation 1 (AutoGPT, BabyAGI):** Relied on unconstrained `while(true)` loops (Plan  Execute  Reflect).
-* *Flaw:* Highly non-deterministic. They frequently fall into infinite loops, hallucinate tool calls, and suffer from severe context degradation. *Verdict: Obsolete.*
-
-
-* **Generation 2 (OpenDevin/OpenHands, SWE-Agent):** The current state-of-the-art for software engineering agents. They introduced event-stream architectures and strictly containerized execution (Docker).
-* *Flaw:* Relying entirely on Docker makes native host-OS file manipulation cumbersome. *Verdict: Adopt their Event-Stream UI and separation of concerns, but replace Docker with native OS-level user sandboxing for better local integration.*
-
-
-* **Generation 3 (Our Approach - The Modern Stack):**
-* **Orchestration via LangGraph:** Instead of unpredictable loops, LangGraph models the agent as a cyclical graph (Finite State Machine). This gives you explicit programmatic control over routing, error recovery, and "Human-in-the-Loop" (HitL) breakpoints.
-* **Tooling via Model Context Protocol (MCP):** Recently open-sourced by Anthropic, MCP standardizes how AI connects to tools. Instead of hardcoding Bash/FS commands in Next.js, we will build an isolated local "MCP Server" for your Linux Terminal and File System. Your Next.js app acts as an "MCP Client."
-
-
+* **Generation 1 (AutoGPT, BabyAGI):** Relied on unconstrained `while(true)` loops. *Verdict: Obsolete.*
+* **Generation 2 (OpenDevin/OpenHands, SWE-Agent):** Event-stream architectures with containerized execution (Docker). *Verdict: Adopted their separation of concerns, replaced Docker with native OS-level user sandboxing.*
+* **Generation 3 (Our Approach):**
+  * **Orchestration via LangGraph:** Agent modeled as a cyclical graph (Finite State Machine) with explicit control over routing and error recovery.
+  * **Tooling via Direct Skills:** Instead of MCP or hardcoded commands, tools are LangChain `DynamicStructuredTool` objects that execute commands as a restricted Linux user via `sudo -u agent_worker bash -c`.
 
 ---
 
-### 2. High-Level System Architecture Diagram
+### 2. High-Level System Architecture
 
-```text
-+-----------------------------------------------------------------------------------+
-|                         CLIENT TIER (Next.js Frontend)                            |
-|  - Chat UI (React / Tailwind)                                                     |
-|  - Agent State Visualizer (Streaming events via Vercel AI SDK / WebSockets)       |
-+----------------------------------------+------------------------------------------+
-                                         | 
-+----------------------------------------v------------------------------------------+
-|                       ORCHESTRATION TIER (Next.js Backend)                        |
-|                                                                                   |
-|  +-----------------------+      +----------------------------------------------+  |
-|  | Cognitive Engine      |      | Hybrid Memory Subsystem (GraphRAG)           |  |
-|  | (LangGraph.js)        |<---->|  - Vector DB (Episodic / Semantic Search)    |  |
-|  |  - State Management   |      |  - Graph DB (Relational / Knowledge Graph)   |  |
-|  |  - ReAct Loop         |      +----------------------------------------------+  |
-|  +-----------+-----------+                                                        |
-|              |                  +----------------------------------------------+  |
-|  +-----------v-----------+      | Model Context Protocol (MCP) Client          |  |
-|  | Local Inference API   |<---->|  - Formats LLM tool calls into MCP RPC calls |  |
-|  | (Ollama / vLLM)       |      +-----------------------+----------------------+  |
-+---------------------------------------------------------|-------------------------+
-                                                          |
-================= STRICT LINUX SECURITY BOUNDARY (sudo privilege drop) ==============
-                                                          |
-+---------------------------------------------------------v-------------------------+
-|                      SANDBOXED EXECUTION TIER (Ubuntu Linux)                      |
-|                                                                                   |
-|  [ Process Owner: `agent_worker` (Restricted User without sudo privileges) ]      |
-|                                                                                   |
-|  +-----------------------------------------------------------------------------+  |
-|  | Local MCP Tool Server (Node.js script)                                      |  |
-|  |   - Web Search Tool (DuckDuckGo/SearXNG API)                                |  |
-|  |   - File System Tool (CRUD operations bounded strictly to ~/workspace)      |  |
-|  |   - Terminal Tool (Subprocess bash execution with timeout limits)           |  |
-|  |   - Download Tool (Resource fetching via cURL/wget)                         |  |
-|  +-----------------------------------------------------------------------------+  |
-+-----------------------------------------------------------------------------------+
+See `implementation_plan/high_level_architecture` for the full diagram.
 
-```
+**Key design decisions (evolved during implementation):**
+- **LLM Provider:** Anthropic SDK via local Antigravity Claude Proxy (port 8080) — supports any model the proxy exposes (currently `gemini-3-flash`). Originally planned for Ollama, but switched for better tool-calling support.
+- **Tool Architecture:** Direct LangChain skills instead of MCP Server. Tools are plain TypeScript functions using `DynamicStructuredTool`, executing commands via `sudo -u agent_worker bash -c`. This eliminated the complexity of a separate MCP server process, stdio transport, and node binary permission issues.
+- **Sandboxing:** OS-level via `sudo -u agent_worker`. The sudoers rule only allows running `/bin/bash` as `agent_worker` — no escalation possible.
 
 ---
 
-### 3. Recommended Tech Stack
+### 3. Tech Stack (Implemented)
 
-* **Full-Stack Framework:** Next.js (App Router, React Server Components).
+* **Full-Stack Framework:** Next.js 16 (App Router).
 * **Cognitive Framework:** `LangGraph.js` + `@langchain/core`.
-* **Tooling Standard:** `@modelcontextprotocol/sdk` (Node.js).
-* **Local LLM Host:** Ollama (running *Llama-3.3-70B* or *DeepSeek-R1* for heavy reasoning, and *Qwen-2.5-Coder* for terminal tasks).
-* **Vector Database:** **pgvector** (Allows you to keep standard Next.js app data and vector embeddings in a single PostgreSQL instance) or **Qdrant**.
-* **Graph Database:** **Neo4j** (Community Edition via local install).
+* **LLM Provider:** `@langchain/anthropic` → local Antigravity Claude Proxy on port 8080.
+* **Tool System:** Direct LangChain `DynamicStructuredTool` skills with `sudo -u agent_worker` sandboxing.
+* **Memory:** `MemorySaver` (in-memory, per-session). Future: PostgresSaver / pgvector.
 
 ---
 
-### 4. Advanced Memory Architecture: Graph vs. Vector
+### 4. Advanced Memory Architecture: Graph vs. Vector (Future Phase)
 
-To build an agent that truly "learns" about the user, relying solely on a Vector Database is a fatal architectural flaw.
-
-**The Difference:**
-
-* **Vector DB (Episodic Memory):** Excellent for "needle in a haystack" retrieval based on semantic similarity *(e.g., "What was the exact error message I pasted yesterday?")*. It fails entirely at multi-hop reasoning.
-* **Graph DB (Semantic Memory):** Stores explicit data as Entity-Relationship Triples. *(e.g., `(User)-[WORKS_ON]->(ProjectX)-[USES]->(Next.js)`).* If you ask, "Update my current project," the Graph instantly traces the definitive relationships without guessing based on vector proximity.
-
-**The Implementation Strategy: Hybrid GraphRAG**
-Do not force the agent to update memory synchronously during a chat loop—it will cause massive latency. Use an asynchronous **Memory Distiller Pattern**:
-
-1. **Background Extraction:** When a conversation goes idle, Next.js triggers a background worker.
-2. **LLM Parsing:** The worker passes the transcript to a smaller, fast LLM instructed to extract Knowledge Triples `(Subject, Predicate, Object)`.
-3. **Graph Upsertion:** Execute a Cypher query to merge these new nodes/edges into Neo4j.
-4. **Pre-Retrieval Phase:** When the user sends a new prompt, Next.js performs:
-* Entity extraction on the prompt.
-* A 2-hop traversal in Neo4j based on those entities.
-* A similarity search in pgvector.
-* *Crucial Step:* Both datasets are converted to text and injected into the Agent's system prompt *before* inference begins.
-
-
+* **Vector DB (Episodic Memory):** Semantic similarity search for past conversations.
+* **Graph DB (Semantic Memory):** Entity-Relationship triples for multi-hop reasoning about the user's context.
+* **Implementation Strategy: Hybrid GraphRAG** — asynchronous Memory Distiller pattern that extracts knowledge triples in the background.
 
 ---
 
-### 5. Security Implementation Guide (Linux + Node.js)
+### 5. Security Implementation (Implemented)
 
-Executing AI-generated terminal commands is extremely dangerous. A hallucination could result in `rm -rf /` or malicious script execution. Since we are running natively on Ubuntu, we will enforce the Principle of Least Privilege using Linux users and a `sudo` bridge via Node.js standard I/O.
-
-#### Step 1: Ubuntu OS Configuration
-
-Create a dedicated user with zero privileges outside its designated workspace.
+#### OS Configuration
 
 ```bash
-# Create user with a restricted shell (rbash) to prevent escaping
+# Create restricted user
 sudo useradd -m -s /bin/rbash agent_worker
-sudo passwd -l agent_worker # Lock password so no one can log in
-
-# Create the sandbox workspace
+sudo passwd -l agent_worker
 sudo mkdir -p /home/agent_worker/workspace
 sudo chown -R agent_worker:agent_worker /home/agent_worker/workspace
-
-# Remove permissions for agent_worker to read the rest of the host system
 sudo chmod 700 /home/agent_worker
-
 ```
 
-#### Step 2: The `sudoers` Bridge
+#### Sudoers Bridge
 
-Your Next.js app likely runs under your main user account (e.g., `www-data` or `ubuntu`). We must allow this user to spawn the MCP Tool Server *as* the restricted `agent_worker` user without requiring a password prompt.
-
-Run `sudo visudo -f /etc/sudoers.d/ai_agent` and add this line:
-
-```text
-ubuntu ALL=(agent_worker) NOPASSWD: /usr/bin/node /absolute/path/to/your/mcp-server.js
-
+```bash
+sudo visudo -f /etc/sudoers.d/ai_agent
 ```
 
-#### Step 3: Programmatic Management in Node.js
-
-Do **not** use `child_process.exec('bash command')` directly inside your Next.js application. Instead, Next.js spawns the MCP Server as the restricted user and communicates with it securely over stdio (Standard Input/Output).
-
-```javascript
-import { spawn } from 'child_process';
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-
-/**
- * Initializes the tools securely by spawning the MCP server as the restricted Linux user.
- */
-export async function initializeSandboxedTools() {
-  // 1. Spawn the Node script AS the restricted user via sudo
-  // The OS Kernel enforces the sandbox.
-  const mcpProcess = spawn('sudo', [
-    '-u', 'agent_worker',
-    '/usr/bin/node',
-    '/absolute/path/to/your/mcp-server.js'
-  ]);
-
-  // 2. Connect the MCP Client to the child process via stdio
-  const transport = new StdioClientTransport({
-      command: mcpProcess.spawnargs[0],
-      args: mcpProcess.spawnargs.slice(1)
-  });
-
-  const mcpClient = new Client({ name: "nextjs-agent", version: "1.0.0" });
-  await mcpClient.connect(transport);
-
-  // 3. Return the tools to be bound to LangGraph
-  // Any bash command executed by this client is trapped in agent_worker's permissions.
-  return mcpClient; 
-}
+Content (replace `belal` with your username):
 
 ```
+belal ALL=(agent_worker) NOPASSWD: /bin/bash
+```
 
-#### Step 4: Defense-in-Depth within the MCP Server
+#### How It Works
 
-Even though the OS protects the host, the `mcp-server.js` running as `agent_worker` must have programmatic guardrails written into its tools:
+The Next.js process runs as the main user. Tool operations execute as `agent_worker` via `sudo -u agent_worker bash -c "..."`. The OS kernel enforces that `agent_worker` can only access `/home/agent_worker/workspace`. No separate process or MCP server needed.
 
-* **Path Traversal Checks:** Reject any file system command where `path.resolve(requestedPath)` does not start with `/home/agent_worker/workspace`.
-* **Execution Timeouts:** Wrap terminal execution tools in an absolute timeout (e.g., `timeout 30s bash -c "..."`) to prevent the LLM from hanging the system by running interactive commands like `nano`, `top`, or endless ping loops.
+#### Defense-in-Depth
+
+* **Path Traversal Checks:** File paths resolved and validated against workspace root.
+* **Execution Timeouts:** All commands wrapped in `timeout 30s`.
+* **Restricted Sudoers:** Only `/bin/bash` is allowed — agent cannot run sudo, install packages, or escalate privileges.
 
 ---
 
 ### 6. Development Roadmap
 
-* **Phase 1: Core Scaffolding (Weeks 1-2)**
-* Set up Next.js App Router, Vercel AI SDK chat UI, and standard PostgreSQL.
-* Connect Next.js to a local Ollama instance and establish basic streaming generation.
+* **Phase 1: Core Scaffolding** ✅ **COMPLETE**
+  * Next.js App Router, chat UI, streaming API route.
+  * LangGraph state machine with MemorySaver checkpointer.
+  * Originally connected to Ollama; later upgraded to Anthropic proxy.
 
+* **Phase 2: Sandboxing & Tooling** ✅ **COMPLETE**
+  * Created `agent_worker` Linux user with restricted access.
+  * Built 7 direct LangChain tools across 4 skill groups (filesystem, terminal, web search, download).
+  * All tools execute as `agent_worker` via `sudo -u agent_worker bash -c`.
+  * ReAct loop: `START → agent ⇄ tools → END`.
+  * Switched LLM to Anthropic SDK via local proxy for robust tool-calling.
 
-* **Phase 2: The Sandbox & Tooling (Weeks 3-4)**
-* Provision the Ubuntu `agent_worker` user and configure the `sudoers` file.
-* Build the standalone Node.js MCP Server script containing the File System, Terminal, Web Search, and Download tools.
-* Implement the `sudo` stdio transport in Next.js to verify tools execute safely under the correct Linux user.
+* **Phase 3: Cognitive Orchestration (Planned)**
+  * Human-in-the-Loop interrupts for destructive commands.
+  * Agent planning and multi-step task decomposition.
 
-
-* **Phase 3: Cognitive Orchestration (Weeks 5-6)**
-* Implement the LangGraph.js state machine (`Input -> Retrieve -> LLM Reason -> [Execute MCP Tool -> Evaluate] -> Respond`).
-* Implement "Human-in-the-Loop" interrupts: Require the user to click "Approve" in the Next.js UI before the agent runs any destructive terminal command (e.g., `rm`, `apt-get`).
-
-
-* **Phase 4: Hybrid Memory (Weeks 7-8)**
-* Deploy pgvector and Neo4j.
-* Write the background "Memory Distiller" extraction prompt to parse chat logs into Knowledge Graph Triples.
-* Refine the GraphRAG query logic to pre-populate the agent's system prompt with your personalized entity knowledge.
+* **Phase 4: Hybrid Memory (Planned)**
+  * Deploy pgvector and Neo4j.
+  * Background Memory Distiller for knowledge graph extraction.
+  * GraphRAG query logic for personalized agent context.

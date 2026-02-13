@@ -3,52 +3,68 @@ import {
   MessagesAnnotation,
   MemorySaver,
 } from "@langchain/langgraph";
-import { ChatOllama } from "@langchain/ollama";
-import { SystemMessage } from "@langchain/core/messages";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
+import { ChatAnthropic } from "@langchain/anthropic";
+import { SystemMessage, AIMessage } from "@langchain/core/messages";
+import { getActiveTools } from "./skills";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
-// Change the model name here to swap models easily.
-const MODEL_NAME = "deepseek-r1:7b";
-const OLLAMA_BASE_URL = "http://localhost:11434";
+const ANTHROPIC_PROXY_URL = "http://localhost:8080";
 
-// ─── LLM Initialization ────────────────────────────────────────────────────
-const llm = new ChatOllama({
-  model: MODEL_NAME,
-  baseUrl: OLLAMA_BASE_URL,
-  temperature: 0.1, // Low temp for deterministic agent behavior
-});
+// ─── Load Tools from Skills ─────────────────────────────────────────────────
+const tools = getActiveTools();
+console.log(
+  `[Agent Graph] Loaded ${tools.length} tools:`,
+  tools.map((t) => t.name).join(", ")
+);
 
-// ─── System Prompt ──────────────────────────────────────────────────────────
+// ─── System Prompt (Phase 2) ────────────────────────────────────────────────
 const SYSTEM_PROMPT = new SystemMessage(
   "You are a highly capable autonomous AI agent running natively on an Ubuntu Linux system. " +
-    "You are currently in Phase 1 of your initialization — the Core Scaffolding phase. " +
-    "You have access to a local LLM via Ollama, orchestrated through LangGraph. " +
-    "Be concise, helpful, and precise. Acknowledge your local environment when relevant."
+  "You are in Phase 2 — you have access to tools for file operations, " +
+  "terminal execution, web search, and file downloads. " +
+  "Use your tools proactively to accomplish tasks. " +
+  "Be concise, helpful, and precise."
 );
+
+// ─── LLM via Antigravity Claude Proxy ───────────────────────────────────────
+const llm = new ChatAnthropic({
+  model: "gemini-3-flash",
+  maxTokens: 64000,
+  temperature: 0.1,
+  apiKey: "not-needed",
+  clientOptions: {
+    baseURL: ANTHROPIC_PROXY_URL,
+  },
+});
+const llmWithTools = llm.bindTools(tools);
 
 // ─── Agent Node ─────────────────────────────────────────────────────────────
 async function callModel(state: typeof MessagesAnnotation.State) {
   const { messages } = state;
-
-  // Prepend the system prompt + forward the full conversation history
-  const response = await llm.invoke([SYSTEM_PROMPT, ...messages]);
-
-  // LangGraph's messages reducer automatically appends the response
+  const response = await llmWithTools.invoke([SYSTEM_PROMPT, ...messages]);
   return { messages: [response] };
 }
 
-// ─── Graph Construction ─────────────────────────────────────────────────────
-// Phase 1: Simple START → agent → END pipeline
-// Phase 2 will add conditional routing to a Tools node here.
+// ─── Conditional Routing ────────────────────────────────────────────────────
+function shouldContinue(state: typeof MessagesAnnotation.State) {
+  const { messages } = state;
+  const lastMessage = messages[messages.length - 1] as AIMessage;
+  if (lastMessage?.tool_calls?.length) {
+    return "tools";
+  }
+  return "__end__";
+}
+
+// ─── Build the ReAct State Machine ──────────────────────────────────────────
+// START → agent ⇄ tools → END
 const workflow = new StateGraph(MessagesAnnotation)
   .addNode("agent", callModel)
+  .addNode("tools", new ToolNode(tools))
   .addEdge("__start__", "agent")
-  .addEdge("agent", "__end__");
-
-// ─── Memory (Checkpointer) ─────────────────────────────────────────────────
-// MemorySaver provides in-memory thread-level persistence.
-// Phase 4 will swap this with PostgresSaver + pgvector.
-const checkpointer = new MemorySaver();
+  .addConditionalEdges("agent", shouldContinue, ["tools", "__end__"])
+  .addEdge("tools", "agent");
 
 // ─── Compile & Export ───────────────────────────────────────────────────────
+const checkpointer = new MemorySaver();
 export const agentGraph = workflow.compile({ checkpointer });
