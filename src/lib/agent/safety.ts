@@ -77,7 +77,12 @@ export function classifyToolCall(
     toolName: string,
     args: Record<string, unknown>
 ): SafetyResult {
-    // 1. Known safe tools (read-only operations)
+    // 1. Skill activation placeholders (use_*) — always safe
+    if (toolName.startsWith("use_")) {
+        return { safe: true };
+    }
+
+    // 2. Known safe tools (read-only operations)
     if (SAFE_TOOLS.has(toolName)) {
         return { safe: true };
     }

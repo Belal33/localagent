@@ -9,6 +9,7 @@ import {
     Loader2,
     Wrench,
     GitBranch,
+    Zap,
 } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -112,22 +113,38 @@ export default function ActivityLog({ items }: ActivityLogProps) {
                             const hasResult = items.some(
                                 (r) => r.type === "tool_result" && r.callId === item.callId
                             );
+                            const isSkillActivation = item.tool?.startsWith("use_");
+
                             return (
                                 <div key={item.id} className="group">
                                     <button
                                         onClick={() => toggleItem(item.id)}
-                                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg
-                                            hover:bg-neutral-800/50 transition-all text-left"
+                                        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg
+                                            transition-all text-left ${isSkillActivation
+                                                ? "hover:bg-violet-500/10 border border-violet-500/20 bg-violet-500/5"
+                                                : "hover:bg-neutral-800/50"
+                                            }`}
                                     >
                                         {hasResult ? (
-                                            <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
+                                            <CheckCircle2 size={12} className={isSkillActivation ? "text-violet-400 shrink-0" : "text-emerald-500 shrink-0"} />
                                         ) : (
-                                            <Loader2 size={12} className="text-amber-400 shrink-0 animate-spin" />
+                                            <Loader2 size={12} className={isSkillActivation ? "text-violet-400 shrink-0 animate-spin" : "text-amber-400 shrink-0 animate-spin"} />
                                         )}
-                                        <Wrench size={11} className="text-neutral-500 shrink-0" />
-                                        <span className="text-xs font-mono text-neutral-300">
+                                        {isSkillActivation ? (
+                                            <Zap size={11} className="text-violet-400 shrink-0" />
+                                        ) : (
+                                            <Wrench size={11} className="text-neutral-500 shrink-0" />
+                                        )}
+                                        <span className={`text-xs font-mono ${isSkillActivation ? "text-violet-300" : "text-neutral-300"
+                                            }`}>
                                             {item.tool}
                                         </span>
+                                        {isSkillActivation && (
+                                            <span className="text-[9px] font-bold uppercase tracking-widest 
+                                                px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 border border-violet-500/30">
+                                                skill
+                                            </span>
+                                        )}
                                         <span className="text-[10px] text-neutral-600 truncate flex-1">
                                             {summarizeArgs(item.args)}
                                         </span>
@@ -138,7 +155,7 @@ export default function ActivityLog({ items }: ActivityLogProps) {
 
                                     {isExpanded && (
                                         <div className="ml-7 mr-2 mb-1 space-y-1 animate-fade-in">
-                                            {item.args && (
+                                            {item.args && !isSkillActivation && (
                                                 <div>
                                                     <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider">
                                                         Args
@@ -158,11 +175,13 @@ export default function ActivityLog({ items }: ActivityLogProps) {
                                                 )
                                                 .map((result) => (
                                                     <div key={result.id}>
-                                                        <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider">
-                                                            Output
+                                                        <span className={`text-[10px] font-bold uppercase tracking-wider ${isSkillActivation ? "text-violet-500" : "text-neutral-500"
+                                                            }`}>
+                                                            {isSkillActivation ? "Activated" : "Output"}
                                                         </span>
-                                                        <pre className="text-[11px] text-emerald-400/80 bg-neutral-950/80 rounded-lg p-2 
-                                                            overflow-x-auto max-h-48 font-mono mt-0.5 whitespace-pre-wrap">
+                                                        <pre className={`text-[11px] bg-neutral-950/80 rounded-lg p-2 
+                                                            overflow-x-auto max-h-48 font-mono mt-0.5 whitespace-pre-wrap ${isSkillActivation ? "text-violet-300/80" : "text-emerald-400/80"
+                                                            }`}>
                                                             {result.output}
                                                         </pre>
                                                     </div>

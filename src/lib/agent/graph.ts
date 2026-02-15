@@ -6,8 +6,12 @@ import {
 } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { ChatAnthropic } from "@langchain/anthropic";
-import { SystemMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
-import { getActiveTools } from "./skills";
+import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+import {
+  getToolsForState,
+  getAllPossibleTools,
+  getSkillNameFromPlaceholder,
+} from "./skills";
 import { AgentAnnotation } from "./state";
 import { humanReviewNode } from "./nodes/human-review";
 import { plannerNode } from "./nodes/planner";
@@ -18,18 +22,18 @@ import { classifierNode } from "./nodes/classifier";
 // ─── Configuration ──────────────────────────────────────────────────────────
 const ANTHROPIC_PROXY_URL = "http://localhost:8080";
 
-// ─── Load Tools from Skills ─────────────────────────────────────────────────
-const tools = getActiveTools();
+// ─── Register ALL possible tools (for ToolNode execution) ───────────────────
+const allTools = getAllPossibleTools();
 console.log(
-  `[Agent Graph] Loaded ${tools.length} tools:`,
-  tools.map((t) => t.name).join(", ")
+  `[Agent Graph] Registered ${allTools.length} total tools:`,
+  allTools.map((t) => t.name).join(", ")
 );
 
-// ─── System Prompt (Phase 3) ────────────────────────────────────────────────
+// ─── System Prompt ──────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = new SystemMessage(
   "You are a highly capable autonomous AI agent running natively on an Ubuntu Linux system. " +
-  "You are in Phase 3 — you have access to tools for file operations, " +
-  "terminal execution, web search, and file downloads. " +
+  "You have access to tools for terminal execution and web search. " +
+  "Additional capabilities are available as skills you can activate by calling use_<skill> tools. " +
   "Destructive operations require human approval before execution. " +
   "For complex tasks, a plan is created before executing. " +
   "Use your tools proactively to accomplish tasks. " +
@@ -46,7 +50,6 @@ const llm = new ChatAnthropic({
     baseURL: ANTHROPIC_PROXY_URL,
   },
 });
-const llmWithTools = llm.bindTools(tools);
 
 // ─── Extended State (adds classification field for routing) ─────────────────
 const GraphAnnotation = Annotation.Root({
@@ -57,11 +60,48 @@ const GraphAnnotation = Annotation.Root({
   }),
 });
 
-// ─── Agent Node ─────────────────────────────────────────────────────────────
+// ─── Agent Node (dynamic tool binding based on active skills) ───────────────
 async function callModel(state: typeof GraphAnnotation.State) {
-  const { messages } = state;
+  const { messages, activeSkills } = state;
+  // Dynamically compute the tools the agent should see
+  const currentTools = getToolsForState(activeSkills);
+  const llmWithTools = llm.bindTools(currentTools);
   const response = await llmWithTools.invoke([SYSTEM_PROMPT, ...messages]);
   return { messages: [response] };
+}
+
+// ─── Custom Tools Node ──────────────────────────────────────────────────────
+// Executes tool calls and detects skill activation placeholders.
+// When a use_<skill> placeholder is called, it adds the skill name
+// to activeSkills so the next callModel iteration sees the real tools.
+
+const toolNode = new ToolNode(allTools);
+
+async function toolsWithActivation(state: typeof GraphAnnotation.State) {
+  const lastMsg = state.messages[state.messages.length - 1] as AIMessage;
+  const toolCalls = lastMsg.tool_calls ?? [];
+
+  // Detect any skill activation calls
+  const activatedSkills: string[] = [];
+  for (const tc of toolCalls) {
+    const skillName = getSkillNameFromPlaceholder(tc.name);
+    if (skillName) {
+      activatedSkills.push(skillName);
+    }
+  }
+
+  // Execute all tool calls via the standard ToolNode
+  const result = await toolNode.invoke(state);
+
+  // If any skills were activated, update state
+  if (activatedSkills.length > 0) {
+    return {
+      ...result,
+      activeSkills: activatedSkills,
+    };
+  }
+
+  return result;
 }
 
 // ─── Conditional Routing: After Agent ───────────────────────────────────────
@@ -95,7 +135,7 @@ function afterReplan(state: typeof GraphAnnotation.State) {
   return "__end__";
 }
 
-// ─── Build the Phase 3 State Machine ────────────────────────────────────────
+// ─── Build the State Machine ────────────────────────────────────────────────
 //
 // Topology:
 //   START → classifier → (simple: agent ⇄ humanReview → tools → agent → END)
@@ -111,7 +151,7 @@ const workflow = new StateGraph(GraphAnnotation)
   .addNode("humanReview", humanReviewNode, {
     ends: ["tools", "agent", "__end__"],
   })
-  .addNode("tools", new ToolNode(tools))
+  .addNode("tools", toolsWithActivation)
   .addNode("replan", replanNode)
 
   // Edges

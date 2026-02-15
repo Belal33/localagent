@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState, memo } from "react";
+import React, { useEffect, useRef, useState, memo, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -23,28 +23,128 @@ mermaid.initialize({
     },
 });
 
+// ─── Expand Icon SVG ───────────────────────────────────────────────────────
+const ExpandIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="15 3 21 3 21 9" />
+        <polyline points="9 21 3 21 3 15" />
+        <line x1="21" y1="3" x2="14" y2="10" />
+        <line x1="3" y1="21" x2="10" y2="14" />
+    </svg>
+);
+
+const CloseIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+);
+
+// ─── Expandable Block Wrapper ──────────────────────────────────────────────
+const ExpandableBlock = ({ children, label }: { children: React.ReactNode; label?: string }) => {
+    const [expanded, setExpanded] = useState(false);
+
+    const handleClose = useCallback(() => setExpanded(false), []);
+
+    useEffect(() => {
+        if (!expanded) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") handleClose();
+        };
+        document.addEventListener("keydown", onKey);
+        document.body.style.overflow = "hidden";
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            document.body.style.overflow = "";
+        };
+    }, [expanded, handleClose]);
+
+    return (
+        <>
+            {/* Inline view with expand button */}
+            <div className="relative group">
+                {children}
+                <button
+                    onClick={() => setExpanded(true)}
+                    title="Expand"
+                    className="absolute top-2 right-2 z-10 p-1.5 rounded-md
+                        bg-neutral-800/80 border border-neutral-600/50
+                        text-neutral-400 hover:text-emerald-400 hover:border-emerald-500/50 hover:bg-neutral-700/90
+                        opacity-0 group-hover:opacity-100
+                        transition-all duration-200 cursor-pointer backdrop-blur-sm"
+                >
+                    <ExpandIcon />
+                </button>
+            </div>
+
+            {/* Fullscreen overlay */}
+            {expanded && (
+                <div
+                    className="fixed inset-0 z-[9999] flex flex-col bg-black/90 backdrop-blur-md"
+                    onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
+                >
+                    {/* Top bar */}
+                    <div className="flex items-center justify-between px-5 py-3 border-b border-neutral-700/50">
+                        {label && (
+                            <span className="text-xs font-mono uppercase tracking-wider text-neutral-400">
+                                {label}
+                            </span>
+                        )}
+                        {!label && <span />}
+                        <button
+                            onClick={handleClose}
+                            className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-700/60 transition-colors cursor-pointer"
+                            title="Close (Esc)"
+                        >
+                            <CloseIcon />
+                        </button>
+                    </div>
+                    {/* Expanded content */}
+                    <div className="flex-1 overflow-auto p-6 flex items-start justify-center">
+                        <div className="w-full max-w-[90vw] max-h-[85vh] overflow-auto
+                            text-sm leading-relaxed
+                            [&_pre]:!max-h-none [&_pre]:!overflow-visible
+                            [&_svg]:max-w-full [&_svg]:h-auto
+                            [&_table]:w-full"
+                        >
+                            {children}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};
+
 // ─── Mermaid Block Component ───────────────────────────────────────────────
 const MermaidBlock = memo(({ chart }: { chart: string }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [svg, setSvg] = useState<string>("");
     const [error, setError] = useState<string>("");
+    const [isWaiting, setIsWaiting] = useState(true);
 
     useEffect(() => {
-        const renderChart = async () => {
+        setIsWaiting(true);
+        setError("");
+
+        const timer = setTimeout(async () => {
+            setIsWaiting(false);
+            if (!chart.trim()) return;
+
             try {
                 const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
                 const { svg: rendered } = await mermaid.render(id, chart);
                 setSvg(rendered);
                 setError("");
             } catch (err) {
+                const orphan = document.getElementById(`d${chart.length}`);
+                orphan?.remove();
                 setError(err instanceof Error ? err.message : "Failed to render diagram");
                 setSvg("");
             }
-        };
+        }, 500);
 
-        if (chart.trim()) {
-            renderChart();
-        }
+        return () => clearTimeout(timer);
     }, [chart]);
 
     if (error) {
@@ -56,7 +156,7 @@ const MermaidBlock = memo(({ chart }: { chart: string }) => {
         );
     }
 
-    if (!svg) {
+    if (!svg || isWaiting) {
         return (
             <div className="bg-neutral-900/60 border border-neutral-700/40 rounded-lg p-4 my-2 flex items-center gap-2 text-xs text-neutral-500">
                 <div className="w-3 h-3 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
@@ -66,11 +166,13 @@ const MermaidBlock = memo(({ chart }: { chart: string }) => {
     }
 
     return (
-        <div
-            ref={containerRef}
-            className="bg-neutral-900/60 border border-neutral-700/40 rounded-lg p-4 my-2 overflow-x-auto flex justify-center [&_svg]:max-w-full"
-            dangerouslySetInnerHTML={{ __html: svg }}
-        />
+        <ExpandableBlock label="Mermaid Diagram">
+            <div
+                ref={containerRef}
+                className="bg-neutral-900/60 border border-neutral-700/40 rounded-lg p-4 my-2 overflow-x-auto flex justify-center [&_svg]:max-w-full"
+                dangerouslySetInnerHTML={{ __html: svg }}
+            />
+        </ExpandableBlock>
     );
 });
 MermaidBlock.displayName = "MermaidBlock";
@@ -93,31 +195,33 @@ const CodeBlock = ({
     // Fenced code block with language
     if (match) {
         return (
-            <div className="relative group my-2">
-                {/* Language badge */}
-                <span className="absolute top-2 right-2 text-[10px] font-mono uppercase tracking-wider text-neutral-500 bg-neutral-800/80 px-1.5 py-0.5 rounded opacity-70 group-hover:opacity-100 transition-opacity">
-                    {language}
-                </span>
-                <SyntaxHighlighter
-                    style={oneDark}
-                    language={language}
-                    PreTag="div"
-                    customStyle={{
-                        margin: 0,
-                        borderRadius: "0.5rem",
-                        fontSize: "0.75rem",
-                        border: "1px solid rgba(64, 64, 64, 0.5)",
-                        background: "rgba(23, 23, 23, 0.8)",
-                    }}
-                    codeTagProps={{
-                        style: {
-                            fontFamily: "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace",
-                        },
-                    }}
-                >
-                    {codeString}
-                </SyntaxHighlighter>
-            </div>
+            <ExpandableBlock label={language}>
+                <div className="relative group my-2">
+                    {/* Language badge */}
+                    <span className="absolute top-2 right-10 text-[10px] font-mono uppercase tracking-wider text-neutral-500 bg-neutral-800/80 px-1.5 py-0.5 rounded opacity-70 group-hover:opacity-100 transition-opacity z-[1]">
+                        {language}
+                    </span>
+                    <SyntaxHighlighter
+                        style={oneDark}
+                        language={language}
+                        PreTag="div"
+                        customStyle={{
+                            margin: 0,
+                            borderRadius: "0.5rem",
+                            fontSize: "0.75rem",
+                            border: "1px solid rgba(64, 64, 64, 0.5)",
+                            background: "rgba(23, 23, 23, 0.8)",
+                        }}
+                        codeTagProps={{
+                            style: {
+                                fontFamily: "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace",
+                            },
+                        }}
+                    >
+                        {codeString}
+                    </SyntaxHighlighter>
+                </div>
+            </ExpandableBlock>
         );
     }
 
@@ -131,6 +235,13 @@ const CodeBlock = ({
         </code>
     );
 };
+
+// ─── Table Wrapper ─────────────────────────────────────────────────────────
+const TableBlock = ({ children, ...props }: React.HTMLAttributes<HTMLTableElement>) => (
+    <ExpandableBlock label="Table">
+        <table {...props}>{children}</table>
+    </ExpandableBlock>
+);
 
 // ─── Main Component ────────────────────────────────────────────────────────
 export default function MarkdownRenderer({ content }: { content: string }) {
@@ -157,6 +268,7 @@ export default function MarkdownRenderer({ content }: { content: string }) {
                 remarkPlugins={[remarkGfm]}
                 components={{
                     code: CodeBlock as any,
+                    table: TableBlock as any,
                 }}
             >
                 {content}

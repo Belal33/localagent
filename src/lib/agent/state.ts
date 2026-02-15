@@ -35,6 +35,12 @@ export const AgentAnnotation = Annotation.Root({
         reducer: (_, next) => next,
         default: () => "",
     }),
+
+    /** Skills activated during this session (by agent calling the placeholder tool) */
+    activeSkills: Annotation<string[]>({
+        reducer: (prev, next) => [...new Set([...prev, ...next])],
+        default: () => [],
+    }),
 });
 
 export type AgentState = typeof AgentAnnotation.State;
