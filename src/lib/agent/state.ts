@@ -1,0 +1,40 @@
+import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
+
+/**
+ * ─── Phase 3: Extended Agent State ──────────────────────────────────────────
+ *
+ * Extends MessagesAnnotation with planning state for the Plan-and-Execute
+ * cognitive architecture. Used by the planner, executor, and replan nodes.
+ */
+
+export const AgentAnnotation = Annotation.Root({
+    // Inherit all message handling from MessagesAnnotation
+    ...MessagesAnnotation.spec,
+
+    // ─── Planning State ──────────────────────────────────────
+    /** Ordered list of remaining steps in the current plan */
+    plan: Annotation<string[]>({
+        reducer: (_, next) => next, // Replace on update
+        default: () => [],
+    }),
+
+    /** History of completed steps: [stepDescription, result] tuples */
+    pastSteps: Annotation<[string, string][]>({
+        reducer: (prev, next) => [...prev, ...next],
+        default: () => [],
+    }),
+
+    /** The step currently being executed */
+    currentStep: Annotation<string>({
+        reducer: (_, next) => next,
+        default: () => "",
+    }),
+
+    /** Final response from the replan node when the task is complete */
+    response: Annotation<string>({
+        reducer: (_, next) => next,
+        default: () => "",
+    }),
+});
+
+export type AgentState = typeof AgentAnnotation.State;

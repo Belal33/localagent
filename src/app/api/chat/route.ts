@@ -5,13 +5,25 @@ import { agentGraph } from "@/lib/agent/graph";
 // Allow longer execution times for local inference + tool execution
 export const maxDuration = 120;
 
+// ─── NDJSON Event Types ─────────────────────────────────────────────────────
+// { type: "token",       content: "..." }                         — text token
+// { type: "interrupt",   data: {...} }                            — HITL approval request
+// { type: "plan",        steps: [...] }                           — plan update
+// { type: "step_status", step: "...", status: "..." }             — step progress
+// { type: "tool_call",   tool: "...", args: {...}, id: "..." }    — agent invokes a tool
+// { type: "tool_result", tool: "...", output: "...", id: "..." }  — tool execution result
+// { type: "node_start",  node: "..." }                            — graph node transition
+// { type: "done" }                                                — stream complete
+
+function ndjsonLine(obj: Record<string, unknown>): Uint8Array {
+    const encoder = new TextEncoder();
+    return encoder.encode(JSON.stringify(obj) + "\n");
+}
+
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
         const { messages, threadId } = body;
-
-        // Debug: log the raw message format from AI SDK v6
-        console.log("Raw messages received:", JSON.stringify(messages, null, 2));
 
         // Convert incoming messages to LangChain format
         const langchainMessages = messages
@@ -40,29 +52,31 @@ export async function POST(req: NextRequest) {
         // Stream the graph execution
         const eventStream = agentGraph.streamEvents(
             { messages: langchainMessages },
-            { ...config, version: "v2" }
+            { ...config, version: "v2", recursionLimit: 100 }
         );
 
-        // Create a plain text ReadableStream
-        const encoder = new TextEncoder();
+        // Create NDJSON ReadableStream
         let isClosed = false;
 
         const stream = new ReadableStream({
             async start(controller) {
                 try {
-                    for await (const { event, data } of eventStream) {
+                    let lastPlan: string[] = [];
+                    let lastEmittedNode = "";
+                    let currentStepIndex = 0;
+
+                    for await (const { event, data, metadata } of eventStream) {
                         if (isClosed) break;
 
-                        // Filter for LLM token generation events
-                        if (event === "on_chat_model_stream" && data.chunk?.content) {
+                        // ─── Text Tokens (only from the "agent" node) ─────
+                        const langgraph_node = (metadata as any)?.langgraph_node;
+                        if (event === "on_chat_model_stream" && data.chunk?.content && langgraph_node === "agent") {
                             const rawContent = data.chunk.content;
                             let textChunk = "";
 
                             if (typeof rawContent === "string") {
-                                // Ollama / simple providers return plain strings
                                 textChunk = rawContent;
                             } else if (Array.isArray(rawContent)) {
-                                // Anthropic returns content blocks: [{type: "text", text: "..."}]
                                 textChunk = rawContent
                                     .filter((block: any) => block.type === "text" && block.text)
                                     .map((block: any) => block.text)
@@ -70,13 +84,178 @@ export async function POST(req: NextRequest) {
                             }
 
                             if (textChunk.length > 0) {
-                                controller.enqueue(encoder.encode(textChunk));
+                                controller.enqueue(
+                                    ndjsonLine({ type: "token", content: textChunk })
+                                );
                             }
                         }
+
+                        // ─── Tool Calls (agent requesting tool use) ─────
+                        if (event === "on_chat_model_end" && langgraph_node === "agent") {
+                            const toolCalls = data.output?.tool_calls;
+                            if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+                                for (const tc of toolCalls) {
+                                    controller.enqueue(
+                                        ndjsonLine({
+                                            type: "tool_call",
+                                            tool: tc.name,
+                                            args: tc.args,
+                                            id: tc.id,
+                                        })
+                                    );
+                                }
+                            }
+                        }
+
+                        // ─── Tool Results ───────────────────────
+                        if (event === "on_tool_end") {
+                            const output = typeof data.output?.content === "string"
+                                ? data.output.content
+                                : JSON.stringify(data.output?.content ?? data.output);
+                            controller.enqueue(
+                                ndjsonLine({
+                                    type: "tool_result",
+                                    tool: (metadata as any)?.langgraph_node === "tools"
+                                        ? (data.output?.name || "unknown")
+                                        : "unknown",
+                                    output: output.slice(0, 2000),
+                                    id: data.output?.tool_call_id || "",
+                                })
+                            );
+                        }
+
+                        // ─── Node Transitions (deduplicated) ────────────
+                        if (event === "on_chain_start" && langgraph_node && langgraph_node !== lastEmittedNode && (metadata as any)?.langgraph_step !== undefined) {
+                            const skipNodes = new Set(["__start__"]);
+                            if (!skipNodes.has(langgraph_node)) {
+                                lastEmittedNode = langgraph_node;
+                                controller.enqueue(
+                                    ndjsonLine({
+                                        type: "node_start",
+                                        node: langgraph_node,
+                                    })
+                                );
+                            }
+                        }
+
+                        // ─── Plan: Emit plan when planner node finishes ────
+                        if (event === "on_chain_end" && langgraph_node === "planner") {
+                            try {
+                                const graphState = await agentGraph.getState(config);
+                                const plan = (graphState.values as any)?.plan as string[] | undefined;
+                                if (plan && plan.length > 0 && JSON.stringify(plan) !== JSON.stringify(lastPlan)) {
+                                    lastPlan = plan;
+                                    currentStepIndex = 0;
+                                    controller.enqueue(
+                                        ndjsonLine({ type: "plan", steps: plan })
+                                    );
+                                }
+                            } catch {
+                                // getState may fail if graph hasn't checkpointed yet
+                            }
+                        }
+
+                        // ─── Step Running: executor starts = current step is running ──
+                        if (event === "on_chain_start" && langgraph_node === "executor" && lastPlan.length > 0) {
+                            if (currentStepIndex < lastPlan.length) {
+                                controller.enqueue(
+                                    ndjsonLine({
+                                        type: "step_status",
+                                        step: lastPlan[currentStepIndex],
+                                        status: "running",
+                                    })
+                                );
+                            }
+                        }
+
+                        // ─── Step Done: replan starts = previous step completed ──
+                        if (event === "on_chain_start" && langgraph_node === "replan" && lastPlan.length > 0) {
+                            if (currentStepIndex < lastPlan.length) {
+                                controller.enqueue(
+                                    ndjsonLine({
+                                        type: "step_status",
+                                        step: lastPlan[currentStepIndex],
+                                        status: "done",
+                                    })
+                                );
+                                currentStepIndex++;
+                            }
+                        }
+
+                        // ─── Final Response ─────────────────────
+                        if (event === "on_chain_end" && data.output?.response) {
+                            controller.enqueue(
+                                ndjsonLine({
+                                    type: "token",
+                                    content: data.output.response,
+                                })
+                            );
+                        }
                     }
+
+                    // Check if graph was interrupted (HITL)
+                    const graphState = await agentGraph.getState(config);
+                    if (
+                        graphState.tasks &&
+                        graphState.tasks.some(
+                            (t: any) => t.interrupts && t.interrupts.length > 0
+                        )
+                    ) {
+                        const interruptData = graphState.tasks
+                            .flatMap((t: any) => t.interrupts || [])
+                            .map((i: any) => i.value);
+
+                        controller.enqueue(
+                            ndjsonLine({
+                                type: "interrupt",
+                                data: interruptData[0] || {},
+                            })
+                        );
+                    }
+
+                    // Stream complete
+                    controller.enqueue(ndjsonLine({ type: "done" }));
                 } catch (err) {
                     if (!isClosed) {
-                        console.error("Stream processing error:", err);
+                        // Check if this is a GraphInterrupt (from interrupt())
+                        // In this case, the graph has pending interrupts we need to surface
+                        const isGraphInterrupt = err instanceof Error && (
+                            err.constructor.name === "GraphInterrupt" ||
+                            err.message?.includes("interrupt")
+                        );
+
+                        if (isGraphInterrupt) {
+                            try {
+                                const graphState = await agentGraph.getState(config);
+                                if (
+                                    graphState.tasks &&
+                                    graphState.tasks.some(
+                                        (t: any) => t.interrupts && t.interrupts.length > 0
+                                    )
+                                ) {
+                                    const interruptData = graphState.tasks
+                                        .flatMap((t: any) => t.interrupts || [])
+                                        .map((i: any) => i.value);
+
+                                    controller.enqueue(
+                                        ndjsonLine({
+                                            type: "interrupt",
+                                            data: interruptData[0] || {},
+                                        })
+                                    );
+                                }
+                            } catch (stateErr) {
+                                console.error("Failed to get graph state after interrupt:", stateErr);
+                            }
+                        } else {
+                            console.error("Stream processing error:", err);
+                            controller.enqueue(
+                                ndjsonLine({
+                                    type: "error",
+                                    message: err instanceof Error ? err.message : "Unknown error",
+                                })
+                            );
+                        }
                     }
                 } finally {
                     if (!isClosed) {
@@ -92,7 +271,7 @@ export async function POST(req: NextRequest) {
 
         return new Response(stream, {
             headers: {
-                "Content-Type": "text/plain; charset=utf-8",
+                "Content-Type": "application/x-ndjson; charset=utf-8",
                 "Cache-Control": "no-cache",
             },
         });

@@ -92,9 +92,12 @@ The Next.js process runs as the main user. Tool operations execute as `agent_wor
   * ReAct loop: `START → agent ⇄ tools → END`.
   * Switched LLM to Anthropic SDK via local proxy for robust tool-calling.
 
-* **Phase 3: Cognitive Orchestration (Planned)**
-  * Human-in-the-Loop interrupts for destructive commands.
-  * Agent planning and multi-step task decomposition.
+* **Phase 3: Cognitive Orchestration** ✅ **COMPLETE**
+  * Human-in-the-Loop (HITL) safety gates using whitelist safety classifier.
+  * LangGraph `interrupt()` / `Command({ resume })` for destructive command approval.
+  * Plan-and-Execute architecture: classifier → planner → executor → agent → replan.
+  * NDJSON streaming protocol with token, interrupt, plan, and step_status events.
+  * Frontend: ApprovalCard dialog, expandable PlanDisplay panel.
 
 * **Phase 4: Hybrid Memory (Planned)**
   * Deploy pgvector and Neo4j.
