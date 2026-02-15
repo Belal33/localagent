@@ -141,11 +141,13 @@ src/
 │   └── agent/
 │       ├── graph.ts           # LangGraph ReAct state machine
 │       └── skills/
-│           ├── index.ts       # Skill registry
-│           ├── filesystem.ts  # File read/write/list/delete
-│           ├── terminal.ts    # Bash command execution
-│           ├── web-search.ts  # DuckDuckGo search
-│           └── download.ts    # URL file downloads
+│           ├── index.ts       # Skill registry & interface
+│           └── core/          # Core skill (always active)
+│               ├── index.ts       # Skill definition & barrel export
+│               ├── filesystem.ts  # File read/write/list/delete
+│               ├── terminal.ts    # Bash command execution
+│               ├── web-search.ts  # DuckDuckGo search
+│               └── download.ts    # URL file downloads
 ```
 
 ---
@@ -174,9 +176,21 @@ src/
 
 ## Adding New Skills
 
-Create a new file in `src/lib/agent/skills/`:
+Each skill lives in its own subdirectory under `src/lib/agent/skills/`.
+
+### 1. Create a skill directory
+
+```
+skills/
+└── my-skill/
+    ├── index.ts       # Skill definition & barrel export
+    └── my-tool.ts     # Tool implementation(s)
+```
+
+### 2. Implement your tool(s)
 
 ```typescript
+// src/lib/agent/skills/my-skill/my-tool.ts
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 
@@ -192,7 +206,24 @@ const myTool = new DynamicStructuredTool({
     },
 });
 
-export const mySkillTools = [myTool];
+export const myTools = [myTool];
 ```
 
-Then register it in `src/lib/agent/skills/index.ts`.
+### 3. Define the skill
+
+```typescript
+// src/lib/agent/skills/my-skill/index.ts
+import { Skill } from "../index";
+import { myTools } from "./my-tool";
+
+export const mySkill: Skill = {
+    name: "my-skill",
+    description: "What this skill provides.",
+    tools: [...myTools],
+    alwaysActive: false, // set true to always load
+};
+```
+
+### 4. Register in the skill registry
+
+Import and add the skill to the `allSkills` array in `src/lib/agent/skills/index.ts`.

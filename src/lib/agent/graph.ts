@@ -10,12 +10,10 @@ import { SystemMessage, AIMessage, HumanMessage } from "@langchain/core/messages
 import { getActiveTools } from "./skills";
 import { AgentAnnotation } from "./state";
 import { humanReviewNode } from "./nodes/human-review";
-import {
-  plannerNode,
-  executorNode,
-  replanNode,
-  classifierNode,
-} from "./nodes/planner";
+import { plannerNode } from "./nodes/planner";
+import { executorNode } from "./nodes/executor";
+import { replanNode } from "./nodes/replan";
+import { classifierNode } from "./nodes/classifier";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 const ANTHROPIC_PROXY_URL = "http://localhost:8080";

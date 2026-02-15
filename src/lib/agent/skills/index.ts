@@ -1,8 +1,6 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { filesystemTools } from "./filesystem";
-import { terminalTools } from "./terminal";
-import { webSearchTools } from "./web-search";
-import { downloadTools } from "./download";
+import { coreSkill } from "./core";
+import { filesystemSkill } from "./filesystem";
 
 /**
  * ─── Skill Registry ─────────────────────────────────────────────────────────
@@ -21,20 +19,10 @@ export interface Skill {
     alwaysActive: boolean;
 }
 
-// ─── Define Skills ──────────────────────────────────────────────────────────
-
-const coreSkill: Skill = {
-    name: "core",
-    description:
-        "Core agent capabilities: file system operations, terminal commands, web search, and file downloads.",
-    tools: [...filesystemTools, ...terminalTools, ...webSearchTools, ...downloadTools],
-    alwaysActive: true,
-};
-
 // ─── Skill Registry ─────────────────────────────────────────────────────────
 // Add more skills here as needed (e.g., coding, research, data analysis)
 
-const allSkills: Skill[] = [coreSkill];
+const allSkills: Skill[] = [coreSkill, filesystemSkill];
 
 /**
  * Returns all tools from active skills.
