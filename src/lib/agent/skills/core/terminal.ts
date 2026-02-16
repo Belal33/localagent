@@ -22,7 +22,7 @@ const executeCommand = new DynamicStructuredTool({
     func: async ({ command }) => {
         try {
             const { stdout, stderr } = await execAsync(
-                `sudo -u agent_worker bash -c ${JSON.stringify(`cd '${WORKSPACE_ROOT}' && timeout 30s ${command}`)}`,
+                `sudo -u agent_worker /bin/bash -c ${JSON.stringify(`cd '${WORKSPACE_ROOT}' && timeout 30s ${command}`)}`,
                 {
                     timeout: TIMEOUT_MS,
                     maxBuffer: 1024 * 1024, // 1MB output buffer

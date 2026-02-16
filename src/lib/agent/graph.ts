@@ -42,7 +42,9 @@ const SYSTEM_PROMPT = new SystemMessage(
 
 // ─── LLM via Antigravity Claude Proxy ───────────────────────────────────────
 const llm = new ChatAnthropic({
-  model: "gemini-3-flash",
+  // model: "gemini-3-flash",
+  model: "claude-opus-4-6-thinking",
+  // model: "claude-sonnet-4-5-thinking",
   maxTokens: 64000,
   temperature: 0.1,
   apiKey: "not-needed",

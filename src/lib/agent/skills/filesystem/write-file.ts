@@ -12,8 +12,9 @@ const writeFile = new DynamicStructuredTool({
     func: async ({ path: filePath, content }) => {
         try {
             const fullPath = `${WORKSPACE_ROOT}/${filePath}`;
-            // Create parent dirs and write file — all as agent_worker
-            await runAs(`mkdir -p "$(dirname '${fullPath}')" && cat > '${fullPath}' << 'AGENT_EOF'\n${content}\nAGENT_EOF`);
+            // Base64-encode content in Node to avoid all shell quoting issues
+            const b64 = Buffer.from(content).toString("base64");
+            await runAs(`mkdir -p "$(dirname '${fullPath}')" && echo '${b64}' | base64 -d > '${fullPath}'`);
             return `File written: ${fullPath}`;
         } catch (error: any) {
             return `Error writing file: ${error.message}`;

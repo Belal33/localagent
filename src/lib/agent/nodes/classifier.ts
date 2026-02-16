@@ -27,7 +27,7 @@ export async function classifierNode(
     );
     const lastUserMsg = userMessages[userMessages.length - 1];
     // if user message is less than 10 words, return simple
-    if ((typeof lastUserMsg?.content === "string") && (lastUserMsg?.content)?.split(" ").length < 10) {
+    if ((typeof lastUserMsg?.content === "string") && (lastUserMsg?.content)?.split(" ").length < 100) {
         return { classification: "simple" };
     }
 

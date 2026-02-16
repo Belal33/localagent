@@ -126,7 +126,7 @@ Make sure your LLM proxy is running before starting the agent.
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:3333](http://localhost:3333) in your browser.
 
 ---
 
@@ -136,18 +136,25 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 src/
 ├── app/
 │   ├── page.tsx              # Chat UI
-│   └── api/chat/route.ts     # Streaming API endpoint
+│   ├── components/           # UI components (ActivityLog, ApprovalCard, etc.)
+│   └── api/chat/
+│       ├── route.ts          # Streaming NDJSON API endpoint
+│       └── resume/route.ts   # HITL resume endpoint
 ├── lib/
 │   └── agent/
-│       ├── graph.ts           # LangGraph ReAct state machine
+│       ├── graph.ts           # LangGraph state machine
+│       ├── state.ts           # Agent state definition
+│       ├── safety.ts          # Safety classification
+│       ├── nodes/             # Graph nodes (classifier, planner, executor, etc.)
 │       └── skills/
 │           ├── index.ts       # Skill registry & interface
-│           └── core/          # Core skill (always active)
-│               ├── index.ts       # Skill definition & barrel export
-│               ├── filesystem.ts  # File read/write/list/delete
-│               ├── terminal.ts    # Bash command execution
-│               ├── web-search.ts  # DuckDuckGo search
-│               └── download.ts    # URL file downloads
+│           ├── core/          # Core skill (always active)
+│           └── filesystem/    # Filesystem skill
+tests/
+└── e2e/
+    ├── smoke.spec.ts          # App load & initial state tests
+    ├── ui-mocked.spec.ts      # Mocked NDJSON stream tests
+    └── chat.spec.ts           # Real LLM integration tests
 ```
 
 ---
@@ -171,6 +178,34 @@ src/
 - **LLM**: Anthropic SDK (via local proxy)
 - **Tools**: Direct LangChain `DynamicStructuredTool` with sudo sandboxing
 - **Language**: TypeScript
+
+---
+
+## Testing
+
+The project includes a comprehensive [Playwright](https://playwright.dev) E2E test suite.
+
+### Run Tests
+
+```bash
+npm test              # Run all tests
+npm run test:smoke    # Smoke tests only
+npm run test:ui       # Interactive Playwright UI
+```
+
+### Test Categories
+
+| File | Tests | Coverage |
+|------|-------|---------|
+| `smoke.spec.ts` | 6 | Page load, header, thread ID, input/button states |
+| `ui-mocked.spec.ts` | 11 | Chat flow, plans, activity log, HITL, multi-turn, loading |
+| `chat.spec.ts` | 2 | Real LLM integration (requires running backend) |
+
+Mocked tests intercept `/api/chat` with controlled NDJSON streams, so they run **without** the LLM backend. To exclude real integration tests:
+
+```bash
+npx playwright test --grep-invert "Real Chat"
+```
 
 ---
 
