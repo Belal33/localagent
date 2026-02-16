@@ -2,6 +2,7 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { coreSkill } from "./core";
 import { filesystemSkill } from "./filesystem";
+import { camofoxSkill } from "./camofox";
 
 /**
  * ─── Skill Registry ─────────────────────────────────────────────────────────
@@ -25,7 +26,7 @@ export interface Skill {
 // ─── Skill Registry ─────────────────────────────────────────────────────────
 // Add more skills here as needed (e.g., coding, research, data analysis)
 
-const allSkills: Skill[] = [coreSkill, filesystemSkill];
+const allSkills: Skill[] = [coreSkill, filesystemSkill, camofoxSkill];
 
 // ─── Placeholder Tool Prefix ────────────────────────────────────────────────
 const PLACEHOLDER_PREFIX = "use_";
