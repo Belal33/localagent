@@ -12,7 +12,9 @@
 !.yarn/versions
 # testing
 /coverage
-
+/test-results
+/playwright-report
+/playwright-video
 # next.js
 /.next/
 /out/

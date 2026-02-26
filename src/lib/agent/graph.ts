@@ -43,8 +43,8 @@ const SYSTEM_PROMPT = new SystemMessage(
 // ─── LLM via Antigravity Claude Proxy ───────────────────────────────────────
 const llm = new ChatAnthropic({
   // model: "gemini-3-flash",
-  model: "claude-opus-4-6-thinking",
-  // model: "claude-sonnet-4-5-thinking",
+  // model: "claude-opus-4-6-thinking",
+  model: "claude-sonnet-4-6",
   maxTokens: 64000,
   temperature: 0.1,
   apiKey: "not-needed",
@@ -125,10 +125,13 @@ function afterClassifier(state: typeof GraphAnnotation.State) {
   return state.classification === "complex" ? "planner" : "agent";
 }
 
-// ─── Conditional Routing: After Replan ──────────────────────────────────────
+// ─── Conditional Routing: After Replan ──────────────────────────────────
+// On "done" or exhausted retries → response is set → __end__
+// On "retry" → plan is unchanged (plan[0] = failed step) → executor re-runs it
+// On "continue" → plan advanced to next step → executor picks up plan[0]
 function afterReplan(state: typeof GraphAnnotation.State) {
   if (state.response) {
-    // Task is complete — inject final response and end
+    // Task complete or max retries exhausted
     return "__end__";
   }
   if (state.plan.length > 0) {

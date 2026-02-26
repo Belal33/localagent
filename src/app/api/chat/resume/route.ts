@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
         // This is the documented approach for Command resume in LangGraph
         const resumeStream = await agentGraph.stream(
             new Command({ resume: decision }),
-            { ...config, streamMode: ["messages", "updates"] as any, recursionLimit: 100 }
+            { ...config, streamMode: ["messages", "updates"] as any, recursionLimit: 300 }
         );
 
         let isClosed = false;

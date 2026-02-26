@@ -168,17 +168,45 @@ export async function POST(req: NextRequest) {
                             }
                         }
 
-                        // ─── Step Done: replan starts = previous step completed ──
-                        if (event === "on_chain_start" && langgraph_node === "replan" && lastPlan.length > 0) {
-                            if (currentStepIndex < lastPlan.length) {
-                                controller.enqueue(
-                                    ndjsonLine({
-                                        type: "step_status",
-                                        step: lastPlan[currentStepIndex],
-                                        status: "done",
-                                    })
-                                );
-                                currentStepIndex++;
+                        // ─── Step Outcome: replan ends = step was evaluated ──
+                        if (event === "on_chain_end" && langgraph_node === "replan" && lastPlan.length > 0) {
+                            try {
+                                const stepState = await agentGraph.getState(config);
+                                const stepStatus = (stepState.values as any)?.stepStatus;
+                                if (currentStepIndex < lastPlan.length) {
+                                    if (stepStatus === "failed") {
+                                        // Step failed — emit "failed", don't advance index
+                                        controller.enqueue(
+                                            ndjsonLine({
+                                                type: "step_status",
+                                                step: lastPlan[currentStepIndex],
+                                                status: "failed",
+                                            })
+                                        );
+                                    } else {
+                                        // Step succeeded — emit "done" and advance
+                                        controller.enqueue(
+                                            ndjsonLine({
+                                                type: "step_status",
+                                                step: lastPlan[currentStepIndex],
+                                                status: "done",
+                                            })
+                                        );
+                                        currentStepIndex++;
+                                    }
+                                }
+                            } catch {
+                                // Fallback: assume done if state read fails
+                                if (currentStepIndex < lastPlan.length) {
+                                    controller.enqueue(
+                                        ndjsonLine({
+                                            type: "step_status",
+                                            step: lastPlan[currentStepIndex],
+                                            status: "done",
+                                        })
+                                    );
+                                    currentStepIndex++;
+                                }
                             }
                         }
 

@@ -41,6 +41,19 @@ export const AgentAnnotation = Annotation.Root({
         reducer: (prev, next) => [...new Set([...prev, ...next])],
         default: () => [],
     }),
+
+    // ─── Step Execution Tracking ────────────────────────────
+    /** Outcome of the last executed step: "success", "failed", or "" (not yet evaluated) */
+    stepStatus: Annotation<"success" | "failed" | "">({
+        reducer: (_, next) => next,
+        default: () => "",
+    }),
+
+    /** Number of retry attempts for the current step (max 2 before giving up) */
+    stepRetries: Annotation<number>({
+        reducer: (_, next) => next,
+        default: () => 0,
+    }),
 });
 
 export type AgentState = typeof AgentAnnotation.State;
