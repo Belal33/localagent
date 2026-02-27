@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { agentGraph } from "@/lib/agent/graph";
+import { getAgentGraph } from "@/lib/agent/graph";
+import { distillConversation } from "@/lib/memory/distiller";
 
 // Allow longer execution times for local inference + tool execution
 export const maxDuration = 120;
@@ -13,6 +14,7 @@ export const maxDuration = 120;
 // { type: "tool_call",   tool: "...", args: {...}, id: "..." }    — agent invokes a tool
 // { type: "tool_result", tool: "...", output: "...", id: "..." }  — tool execution result
 // { type: "node_start",  node: "..." }                            — graph node transition
+// { type: "memory",      episodic: [...], knowledge: [...] }      — retrieved memory context
 // { type: "done" }                                                — stream complete
 
 function ndjsonLine(obj: Record<string, unknown>): Uint8Array {
@@ -49,8 +51,11 @@ export async function POST(req: NextRequest) {
             configurable: { thread_id: threadId || "default_thread" },
         };
 
+        // Get the compiled graph (lazy singleton — initializes PostgresSaver on first call)
+        const graph = await getAgentGraph();
+
         // Stream the graph execution
-        const eventStream = agentGraph.streamEvents(
+        const eventStream = graph.streamEvents(
             { messages: langchainMessages },
             { ...config, version: "v2", recursionLimit: 100 }
         );
@@ -138,10 +143,29 @@ export async function POST(req: NextRequest) {
                             }
                         }
 
+                        // ─── Memory Context: emit retrieved memories to client ──
+                        if (event === "on_chain_end" && langgraph_node === "memoryRetrieval") {
+                            try {
+                                const memState = await graph.getState(config);
+                                const mem = (memState.values as any)?.retrievedMemory;
+                                if (mem && (mem.episodic?.length > 0 || mem.knowledge?.length > 0)) {
+                                    controller.enqueue(
+                                        ndjsonLine({
+                                            type: "memory",
+                                            episodic: mem.episodic || [],
+                                            knowledge: mem.knowledge || [],
+                                        })
+                                    );
+                                }
+                            } catch {
+                                // State read may fail if not yet checkpointed
+                            }
+                        }
+
                         // ─── Plan: Emit plan when planner node finishes ────
                         if (event === "on_chain_end" && langgraph_node === "planner") {
                             try {
-                                const graphState = await agentGraph.getState(config);
+                                const graphState = await graph.getState(config);
                                 const plan = (graphState.values as any)?.plan as string[] | undefined;
                                 if (plan && plan.length > 0 && JSON.stringify(plan) !== JSON.stringify(lastPlan)) {
                                     lastPlan = plan;
@@ -171,7 +195,7 @@ export async function POST(req: NextRequest) {
                         // ─── Step Outcome: replan ends = step was evaluated ──
                         if (event === "on_chain_end" && langgraph_node === "replan" && lastPlan.length > 0) {
                             try {
-                                const stepState = await agentGraph.getState(config);
+                                const stepState = await graph.getState(config);
                                 const stepStatus = (stepState.values as any)?.stepStatus;
                                 if (currentStepIndex < lastPlan.length) {
                                     if (stepStatus === "failed") {
@@ -222,7 +246,7 @@ export async function POST(req: NextRequest) {
                     }
 
                     // Check if graph was interrupted (HITL)
-                    const graphState = await agentGraph.getState(config);
+                    const graphState = await graph.getState(config);
                     if (
                         graphState.tasks &&
                         graphState.tasks.some(
@@ -243,6 +267,13 @@ export async function POST(req: NextRequest) {
 
                     // Stream complete
                     controller.enqueue(ndjsonLine({ type: "done" }));
+
+                    // ─── Fire-and-forget memory distillation ──────────────────
+                    // Runs in background after stream closes; never blocks the response.
+                    const allMessages = langchainMessages;
+                    distillConversation("default", threadId || "default_thread", allMessages).catch((err) =>
+                        console.error("[Memory Distiller] Background distillation failed:", err),
+                    );
                 } catch (err) {
                     if (!isClosed) {
                         // Check if this is a GraphInterrupt (from interrupt())
@@ -254,7 +285,7 @@ export async function POST(req: NextRequest) {
 
                         if (isGraphInterrupt) {
                             try {
-                                const graphState = await agentGraph.getState(config);
+                                const graphState = await graph.getState(config);
                                 if (
                                     graphState.tasks &&
                                     graphState.tasks.some(

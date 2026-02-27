@@ -1,6 +1,5 @@
 import {
   StateGraph,
-  MemorySaver,
   Annotation,
   END,
 } from "@langchain/langgraph";
@@ -18,9 +17,11 @@ import { plannerNode } from "./nodes/planner";
 import { executorNode } from "./nodes/executor";
 import { replanNode } from "./nodes/replan";
 import { classifierNode } from "./nodes/classifier";
+import { memoryRetrievalNode } from "./nodes/memory-retrieval";
+import { getCheckpointer } from "@/lib/memory/db";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
-const ANTHROPIC_PROXY_URL = "http://localhost:8080";
+const ANTHROPIC_PROXY_URL = process.env.ANTHROPIC_PROXY_URL;
 
 // ─── Register ALL possible tools (for ToolNode execution) ───────────────────
 const allTools = getAllPossibleTools();
@@ -142,13 +143,14 @@ function afterReplan(state: typeof GraphAnnotation.State) {
 
 // ─── Build the State Machine ────────────────────────────────────────────────
 //
-// Topology:
-//   START → classifier → (simple: agent ⇄ humanReview → tools → agent → END)
-//                       → (complex: planner → executor → agent ⇄ humanReview → tools → agent → replan → ...)
+// Phase 4 Topology:
+//   START → memoryRetrieval → classifier → (simple: agent ⇄ humanReview → tools → agent → END)
+//                                        → (complex: planner → executor → agent ⇄ humanReview → tools → agent → replan → ...)
 //
 
 const workflow = new StateGraph(GraphAnnotation)
   // Nodes
+  .addNode("memoryRetrieval", memoryRetrievalNode)
   .addNode("classifier", classifierNode)
   .addNode("planner", plannerNode)
   .addNode("executor", executorNode)
@@ -159,8 +161,9 @@ const workflow = new StateGraph(GraphAnnotation)
   .addNode("tools", toolsWithActivation)
   .addNode("replan", replanNode)
 
-  // Edges
-  .addEdge("__start__", "classifier")
+  // Edges — memoryRetrieval is the new entry point
+  .addEdge("__start__", "memoryRetrieval")
+  .addEdge("memoryRetrieval", "classifier")
   .addConditionalEdges("classifier", afterClassifier, ["planner", "agent"])
   .addEdge("planner", "executor")
   .addEdge("executor", "agent")
@@ -172,10 +175,17 @@ const workflow = new StateGraph(GraphAnnotation)
   .addEdge("tools", "agent")
   .addConditionalEdges("replan", afterReplan, ["executor", "__end__"]);
 
-// ─── Compile & Export ───────────────────────────────────────────────────────
-const checkpointer = new MemorySaver();
-export const agentGraph = workflow.compile({
-  checkpointer,
+// ─── Lazy Async Compiled Graph ───────────────────────────────────────────────
+// Compiled once and reused across requests (singleton).
+// Using PostgresSaver for durable cross-restart session persistence (Phase 4).
+// The humanReview node uses interrupt() which requires a checkpointer.
 
-  // The humanReview node uses interrupt() which requires a checkpointer
-});
+let _compiledGraph: ReturnType<typeof workflow.compile> | null = null;
+
+export async function getAgentGraph(): Promise<ReturnType<typeof workflow.compile>> {
+  if (!_compiledGraph) {
+    const checkpointer = await getCheckpointer();
+    _compiledGraph = workflow.compile({ checkpointer });
+  }
+  return _compiledGraph;
+}

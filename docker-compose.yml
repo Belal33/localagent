@@ -1,0 +1,32 @@
+version: "3.8"
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent_local_dev
+      POSTGRES_DB: agent_memory
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: agent_neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474" # Browser UI
+      - "7687:7687" # Bolt protocol
+    environment:
+      NEO4J_AUTH: neo4j/agent_local_dev
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4jdata:/data
+
+volumes:
+  pgdata:
+  neo4jdata:

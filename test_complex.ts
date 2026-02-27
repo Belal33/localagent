@@ -1,9 +1,10 @@
 import { HumanMessage } from "@langchain/core/messages";
-import { agentGraph } from "./src/lib/agent/graph";
+import { getAgentGraph } from "./src/lib/agent/graph";
 
 async function runTest() {
     console.log("Starting Complex Workflow Test...");
     const config = { configurable: { thread_id: "test-" + Date.now() } };
+    const agentGraph = await getAgentGraph();
 
     // A query that requires multi-steps to trigger complex workflow
     const prompt = "Please create a simple python script called hello.py that prints hello world. Then read the file to confirm it was created.";

@@ -10,7 +10,7 @@ test.describe("Smoke Tests", () => {
         ).toBeVisible();
 
         // Phase badge should be visible
-        await expect(page.getByText("Phase 3")).toBeVisible();
+        await expect(page.getByText("Phase 4")).toBeVisible();
 
         // Engine subtitle should be visible
         await expect(

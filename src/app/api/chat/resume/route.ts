@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { Command } from "@langchain/langgraph";
 import { AIMessageChunk, AIMessage, ToolMessage } from "@langchain/core/messages";
-import { agentGraph } from "@/lib/agent/graph";
+import { getAgentGraph } from "@/lib/agent/graph";
 
 export const maxDuration = 120;
 
@@ -32,11 +32,14 @@ export async function POST(req: NextRequest) {
             configurable: { thread_id: threadId },
         };
 
+        // Get the compiled graph (lazy singleton — initializes PostgresSaver on first call)
+        const graph = await getAgentGraph();
+
         // Load existing plan from graph state before resuming
         let lastPlan: string[] = [];
         let currentStepIndex = 0;
         try {
-            const initialState = await agentGraph.getState(config);
+            const initialState = await graph.getState(config);
             const existingPlan = (initialState.values as any)?.plan as string[] | undefined;
             if (existingPlan && existingPlan.length > 0) {
                 lastPlan = existingPlan;
@@ -49,7 +52,7 @@ export async function POST(req: NextRequest) {
 
         // Resume using graph.stream() with multi-mode (messages + updates)
         // This is the documented approach for Command resume in LangGraph
-        const resumeStream = await agentGraph.stream(
+        const resumeStream = await graph.stream(
             new Command({ resume: decision }),
             { ...config, streamMode: ["messages", "updates"] as any, recursionLimit: 300 }
         );
@@ -210,7 +213,7 @@ export async function POST(req: NextRequest) {
                     }
 
                     // After stream completes, check for pending interrupts
-                    const graphState = await agentGraph.getState(config);
+                    const graphState = await graph.getState(config);
                     if (
                         graphState.tasks &&
                         graphState.tasks.some(
@@ -240,7 +243,7 @@ export async function POST(req: NextRequest) {
 
                         if (isGraphInterrupt) {
                             try {
-                                const graphState = await agentGraph.getState(config);
+                                const graphState = await graph.getState(config);
                                 if (
                                     graphState.tasks &&
                                     graphState.tasks.some(

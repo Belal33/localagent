@@ -6,6 +6,7 @@ import MarkdownRenderer from "./components/MarkdownRenderer";
 import ApprovalCard from "./components/ApprovalCard";
 import PlanDisplay from "./components/PlanDisplay";
 import ActivityLog, { type ActivityItem } from "./components/ActivityLog";
+import MemoryContext, { type EpisodicMemory, type KnowledgeFact } from "./components/MemoryContext";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ type StreamEvent =
   | { type: "tool_call"; tool: string; args: Record<string, unknown>; id: string }
   | { type: "tool_result"; tool: string; output: string; id: string }
   | { type: "node_start"; node: string }
+  | { type: "memory"; episodic: EpisodicMemory[]; knowledge: KnowledgeFact[] }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -102,6 +104,8 @@ export default function AgentInterface() {
   const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
   const [interrupt, setInterrupt] = useState<InterruptData | null>(null);
   const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
+  const [memoryEpisodic, setMemoryEpisodic] = useState<EpisodicMemory[]>([]);
+  const [memoryKnowledge, setMemoryKnowledge] = useState<KnowledgeFact[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -200,6 +204,11 @@ export default function AgentInterface() {
             ]);
             break;
 
+          case "memory":
+            setMemoryEpisodic(event.episodic);
+            setMemoryKnowledge(event.knowledge);
+            break;
+
           case "interrupt":
             setInterrupt(event.data);
             setIsLoading(false);
@@ -260,6 +269,8 @@ export default function AgentInterface() {
     setInterrupt(null);
     setPlanSteps([]);
     setActivityItems([]);
+    setMemoryEpisodic([]);
+    setMemoryKnowledge([]);
 
     try {
       const response = await fetch("/api/chat", {
@@ -338,7 +349,7 @@ export default function AgentInterface() {
               <TerminalSquare size={22} className="text-emerald-500" />
               Local AI Core
               <span className="text-xs font-normal tracking-wide text-neutral-500 bg-neutral-800 px-2 py-0.5 rounded-full">
-                Phase 3
+                Phase 4
               </span>
             </h1>
             <p className="text-xs text-neutral-500 mt-1 flex items-center gap-2">
@@ -418,6 +429,19 @@ export default function AgentInterface() {
               )}
             </div>
           ))}
+
+          {/* Memory Context */}
+          {(memoryEpisodic.length > 0 || memoryKnowledge.length > 0) && (
+            <div className="flex gap-3 justify-start animate-fade-in">
+              <div className="w-8 h-8 rounded-lg bg-purple-950/60 border border-purple-900/40 flex items-center justify-center shrink-0 mt-0.5">
+                <TerminalSquare
+                  className="text-purple-400"
+                  size={16}
+                />
+              </div>
+              <MemoryContext episodic={memoryEpisodic} knowledge={memoryKnowledge} />
+            </div>
+          )}
 
           {/* Plan Display */}
           {planSteps.length > 0 && (
