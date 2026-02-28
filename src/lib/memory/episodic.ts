@@ -11,7 +11,7 @@ import { generateEmbedding } from "./embeddings";
 const pool = new Pool({
     connectionString:
         process.env.AGENT_PG_URI ??
-        "postgresql://agent:agent_local_dev@localhost:5432/agent_memory",
+        "postgresql://agent:agent_local_dev@postgres:5432/agent_memory",
 });
 
 export interface EpisodicMemory {

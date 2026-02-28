@@ -6,7 +6,7 @@ import { promisify } from "util";
 const execAsync = promisify(exec);
 
 // ─── Configuration ──────────────────────────────────────────────────────────
-const WORKSPACE_ROOT = "/home/agent_worker/workspace";
+const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/workspace";
 const TIMEOUT_MS = 30_000; // 30 seconds absolute limit
 
 // ─── Terminal Tool ──────────────────────────────────────────────────────────
@@ -14,7 +14,7 @@ const TIMEOUT_MS = 30_000; // 30 seconds absolute limit
 const executeCommand = new DynamicStructuredTool({
     name: "execute_command",
     description:
-        `Execute a bash command as the sandboxed agent_worker user. ` +
+        `Execute a bash command in the sandboxed workspace. ` +
         `Commands are time-limited to 30 seconds. Working directory: ${WORKSPACE_ROOT}`,
     schema: z.object({
         command: z.string().describe("The bash command to execute"),
@@ -22,8 +22,9 @@ const executeCommand = new DynamicStructuredTool({
     func: async ({ command }) => {
         try {
             const { stdout, stderr } = await execAsync(
-                `sudo -u agent_worker /bin/bash -c ${JSON.stringify(`cd '${WORKSPACE_ROOT}' && timeout 30s ${command}`)}`,
+                `timeout 30s bash -c ${JSON.stringify(command)}`,
                 {
+                    cwd: WORKSPACE_ROOT,
                     timeout: TIMEOUT_MS,
                     maxBuffer: 1024 * 1024, // 1MB output buffer
                 }

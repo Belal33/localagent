@@ -3,6 +3,7 @@ import { Command } from "@langchain/langgraph";
 import { AIMessageChunk, AIMessage, ToolMessage } from "@langchain/core/messages";
 import { getAgentGraph } from "@/lib/agent/graph";
 
+export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 function ndjsonLine(obj: Record<string, unknown>): Uint8Array {

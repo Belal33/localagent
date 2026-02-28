@@ -3,7 +3,7 @@ import { z } from "zod";
 import { WORKSPACE_ROOT, runAsWithTimeout } from "./shared";
 
 // ─── Download Tool ──────────────────────────────────────────────────────────
-// Downloads run as agent_worker — files are saved to their workspace.
+// Downloads run within the container workspace.
 
 const downloadFile = new DynamicStructuredTool({
     name: "download_file",

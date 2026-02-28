@@ -1,6 +1,6 @@
 # Local AI Agent
 
-An autonomous AI agent running natively on Ubuntu Linux with sandboxed tool execution. Built with **Next.js**, **LangGraph.js**, and the **Anthropic SDK** (via a local proxy), featuring a ReAct (Reasoning + Acting) architecture.
+An autonomous AI agent running natively in a **Docker container** with sandboxed tool execution. Built with **Next.js**, **LangGraph.js**, and the **Anthropic SDK** (via a local proxy), featuring a Plan-and-Execute cognitive architecture with hybrid memory (PostgreSQL + Neo4j).
 
 ## Architecture
 
@@ -8,125 +8,108 @@ An autonomous AI agent running natively on Ubuntu Linux with sandboxed tool exec
 ┌──────────────────────────────────────────────────────┐
 │                    Chat UI (Next.js)                  │
 ├──────────────────────────────────────────────────────┤
-│              API Route → LangGraph ReAct Loop         │
+│        API Route → LangGraph Plan-and-Execute         │
+│  memoryRetrieval → classifier → planner → executor    │
 │              ┌────────┐     ┌────────┐               │
-│      START → │ Agent  │ ⇄   │ Tools  │ → END         │
+│              │ Agent  │ ⇄   │ Tools  │ → END         │
 │              └────────┘     └────────┘               │
 │                               │                       │
 │              ┌────────────────┴───────────────┐      │
-│              │  Skills (sudo -u agent_worker)  │      │
+│              │    Skills (containerized)       │      │
 │              ├─────────────┬──────────────────┤      │
 │              │ filesystem  │ terminal         │      │
 │              │ web-search  │ download         │      │
 │              └─────────────┴──────────────────┘      │
+├──────────────────────────────────────────────────────┤
+│              Hybrid Memory System                     │
+│    PostgreSQL (pgvector)  │  Neo4j (Knowledge Graph) │
 └──────────────────────────────────────────────────────┘
 ```
 
 **Tools**: `read_file`, `write_file`, `list_directory`, `delete_file`, `execute_command`, `web_search`, `download_file`
 
-All file and terminal operations are executed as the restricted `agent_worker` Linux user via `sudo`, providing OS-level sandboxing.
+The entire app runs inside a Docker container. The container itself is the sandbox — no OS-level user configuration required.
 
 ---
 
 ## Prerequisites
 
-- **Ubuntu Linux** (22.04+ recommended)
-- **Node.js** 20+ (via [nvm](https://github.com/nvm-sh/nvm) recommended)
-- **LLM Provider** — one of:
-  - [Antigravity Claude Proxy](https://github.com/anthropics/antigravity) running locally on port `8080` (default)
-  - Or any Anthropic-compatible API endpoint
+- **Docker** & **Docker Compose** (v2)
+- **LLM Provider** — an Anthropic-compatible API proxy running on the host (e.g., on port `8080`)
+- **Ollama** — running on the host with `mxbai-embed-large:latest` pulled (for embeddings)
 
 ---
 
 ## Quick Start
 
-### 1. Clone & Install
+### 1. Clone
 
 ```bash
 git clone <repo-url> localagnent
 cd localagnent
-npm install
 ```
 
-### 2. Configure the Sandboxed User
+### 2. Configure Environment
 
-The agent executes tools as a restricted Linux user called `agent_worker`. This prevents the AI from accessing your personal files or running dangerous commands.
+Edit `.env.local` with your settings:
 
-#### Create the user
+```env
+# Host services (these run on YOUR machine, not in Docker)
+ANTHROPIC_PROXY_URL=http://host.docker.internal:8080
+AGENT_OLLAMA_URL=http://host.docker.internal:11434
 
+# In-container services (Docker networking handles these)
+AGENT_PG_URI=postgresql://agent:agent_local_dev@postgres:5432/agent_memory
+AGENT_NEO4J_URI=bolt://neo4j:7687
+
+# Agent workspace (mounted as a volume)
+WORKSPACE_ROOT=/workspace
+```
+
+### 3. Start the Agent
+
+**Development** (hot reload, source code mounted):
 ```bash
-# Create restricted user with limited shell
-sudo useradd -m -s /bin/rbash agent_worker
-sudo passwd -l agent_worker
-
-# Create workspace directory
-sudo mkdir -p /home/agent_worker/workspace
-sudo chown -R agent_worker:agent_worker /home/agent_worker/workspace
+docker compose --profile dev up
 ```
 
-#### Configure passwordless sudo
-
-The Next.js app needs to run commands as `agent_worker` without a password prompt:
-
+**Production** (built image):
 ```bash
-sudo visudo -f /etc/sudoers.d/ai_agent
+docker compose --profile prod up --build
 ```
 
-Add this single line (replace `belal` with your username):
-
-```
-belal ALL=(agent_worker) NOPASSWD: /bin/bash
-```
-
-Save and exit (`Ctrl+O` → `Enter` → `Ctrl+X`).
-
-#### Verify it works
-
+**Infrastructure only** (Postgres + Neo4j, no app):
 ```bash
-sudo -u agent_worker bash -c "whoami && ls /home/agent_worker/"
-```
-
-Should print `agent_worker` **without asking for a password**.
-
-#### (Optional) Give yourself access to agent workspace
-
-If you want to browse the agent's files:
-
-```bash
-sudo usermod -aG agent_worker $(whoami)
-sudo chmod -R 770 /home/agent_worker
-```
-
-> **Note:** Log out and back in for group membership to take effect.
-
-### 3. Configure the LLM
-
-The agent uses the Anthropic SDK pointing at a local proxy. Edit `src/lib/agent/graph.ts` to configure:
-
-```typescript
-// LLM provider endpoint
-const ANTHROPIC_PROXY_URL = "http://localhost:8080";
-
-const llm = new ChatAnthropic({
-    model: "gemini-3-flash",       // Change to your preferred model
-    maxTokens: 64000,
-    temperature: 0.1,
-    apiKey: "not-needed",           // Proxy handles auth
-    clientOptions: {
-        baseURL: ANTHROPIC_PROXY_URL,
-    },
-});
-```
-
-Make sure your LLM proxy is running before starting the agent.
-
-### 4. Start the Agent
-
-```bash
-npm run dev
+docker compose up
 ```
 
 Open [http://localhost:3333](http://localhost:3333) in your browser.
+
+> **Note**: Use `--build` only the first time or after changing `Dockerfile` / `package.json`. Subsequent runs can omit it.
+
+---
+
+## Docker Services
+
+| Service | Profile | Description |
+|---------|---------|-------------|
+| `app-dev` | `dev` | Next.js dev server with hot reload, source mounted as volume |
+| `app-prod` | `prod` | Next.js production build, code baked into image |
+| `postgres` | *(always)* | PostgreSQL 16 + pgvector for episodic memory & checkpointing |
+| `neo4j` | *(always)* | Neo4j 5 Community for semantic knowledge graph |
+
+### Host Service Access
+
+Services running on your host machine (Ollama, Anthropic proxy) are accessible from the container via `host.docker.internal`. This is configured automatically via `extra_hosts` in `docker-compose.yml`.
+
+### Volumes
+
+| Volume | Purpose |
+|--------|---------|
+| `./workspace:/workspace` | Agent's sandboxed working directory |
+| `.:/app` *(dev only)* | Source code mount for hot reload |
+| `pgdata` | PostgreSQL data persistence |
+| `neo4jdata` | Neo4j data persistence |
 
 ---
 
@@ -141,15 +124,21 @@ src/
 │       ├── route.ts          # Streaming NDJSON API endpoint
 │       └── resume/route.ts   # HITL resume endpoint
 ├── lib/
-│   └── agent/
-│       ├── graph.ts           # LangGraph state machine
-│       ├── state.ts           # Agent state definition
-│       ├── safety.ts          # Safety classification
-│       ├── nodes/             # Graph nodes (classifier, planner, executor, etc.)
-│       └── skills/
-│           ├── index.ts       # Skill registry & interface
-│           ├── core/          # Core skill (always active)
-│           └── filesystem/    # Filesystem skill
+│   ├── agent/
+│   │   ├── graph.ts           # LangGraph state machine
+│   │   ├── state.ts           # Agent state definition
+│   │   ├── safety.ts          # Safety classification
+│   │   ├── nodes/             # Graph nodes (classifier, planner, executor, etc.)
+│   │   └── skills/
+│   │       ├── index.ts       # Skill registry & interface
+│   │       ├── core/          # Core skill (always active)
+│   │       └── filesystem/    # Filesystem skill
+│   └── memory/
+│       ├── db.ts              # PostgresSaver + Neo4j driver singletons
+│       ├── embeddings.ts      # Ollama embedding generation
+│       ├── episodic.ts        # pgvector episodic memory store
+│       ├── distiller.ts       # LLM-based memory extraction
+│       └── knowledge-graph.ts # Neo4j knowledge triple store
 tests/
 └── e2e/
     ├── smoke.spec.ts          # App load & initial state tests
@@ -163,20 +152,22 @@ tests/
 
 | Layer | Mechanism |
 |-------|-----------|
-| **OS Sandboxing** | All tools run as `agent_worker` via `sudo -u agent_worker bash -c ...` |
-| **File Isolation** | Agent can only access `/home/agent_worker/workspace` |
+| **Container Isolation** | All tools run inside the Docker container |
+| **File Isolation** | Agent can only access `/workspace` (mounted volume) |
 | **Command Timeout** | Terminal commands are killed after 30 seconds |
 | **Path Validation** | File tools validate paths stay within workspace |
-| **Sudoers Lock** | Only `/bin/bash` is allowed — no escalation possible |
+| **Human-in-the-Loop** | Destructive operations require approval before execution |
 
 ---
 
 ## Tech Stack
 
 - **Frontend**: Next.js 16 (App Router) + Vercel AI SDK
-- **Orchestration**: LangGraph.js (ReAct loop)
+- **Orchestration**: LangGraph.js (Plan-and-Execute architecture)
 - **LLM**: Anthropic SDK (via local proxy)
-- **Tools**: Direct LangChain `DynamicStructuredTool` with sudo sandboxing
+- **Memory**: PostgreSQL + pgvector (episodic) / Neo4j (semantic knowledge graph)
+- **Embeddings**: Ollama (mxbai-embed-large)
+- **Containerization**: Docker + Docker Compose (profiles for dev/prod)
 - **Language**: TypeScript
 
 ---

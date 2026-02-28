@@ -12,9 +12,9 @@ import neo4j, { type Driver } from "neo4j-driver";
 // ─── Configuration (env vars with local dev defaults) ────────────────────────
 const PG_URI =
     process.env.AGENT_PG_URI ??
-    "postgresql://agent:agent_local_dev@localhost:5432/agent_memory";
+    "postgresql://agent:agent_local_dev@postgres:5432/agent_memory";
 
-const NEO4J_URI = process.env.AGENT_NEO4J_URI ?? "bolt://localhost:7687";
+const NEO4J_URI = process.env.AGENT_NEO4J_URI ?? "bolt://neo4j:7687";
 const NEO4J_USER = process.env.AGENT_NEO4J_USER ?? "neo4j";
 const NEO4J_PASS = process.env.AGENT_NEO4J_PASS ?? "agent_local_dev";
 
@@ -37,6 +37,7 @@ export async function getCheckpointer(): Promise<PostgresSaver> {
 /**
  * Returns a singleton Neo4j driver instance.
  * Connection is lazy — it only actually connects on first query.
+ * Also ensures the vector index exists on first init.
  */
 export function getNeo4jDriver(): Driver {
     if (!_neo4jDriver) {
@@ -44,6 +45,8 @@ export function getNeo4jDriver(): Driver {
             NEO4J_URI,
             neo4j.auth.basic(NEO4J_USER, NEO4J_PASS),
         );
+        // Fire-and-forget: ensure vector index exists
+        import("./knowledge-graph").then((kg) => kg.ensureVectorIndex()).catch(() => { });
     }
     return _neo4jDriver;
 }

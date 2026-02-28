@@ -4,6 +4,7 @@ import { getAgentGraph } from "@/lib/agent/graph";
 import { distillConversation } from "@/lib/memory/distiller";
 
 // Allow longer execution times for local inference + tool execution
+export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 // ─── NDJSON Event Types ─────────────────────────────────────────────────────

@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.gitignore
+test-results
+playwright-report
+playwright-video
+*.tsbuildinfo
+next-env.d.ts
+.env*
+.DS_Store
+implementation_plan
+README.md

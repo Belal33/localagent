@@ -3,7 +3,8 @@ import type { Browser, Page, BrowserContext } from "playwright-core";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const HEADLESS = process.env.NODE_ENV === "production";
+// Headless when in production OR when there's no display (e.g. Docker)
+const HEADLESS = process.env.NODE_ENV === "production" || !process.env.DISPLAY;
 
 // ─── Browser Lifecycle ──────────────────────────────────────────────────────
 

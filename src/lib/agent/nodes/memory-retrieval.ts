@@ -70,11 +70,9 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
         // ─── 2. Semantic Memory: entity facts via Neo4j ───────────────────────
         try {
             const entities = await searchEntities(userQuery, 5);
-            console.log(`[Memory Retrieval] Neo4j searchEntities("${userQuery}") → ${entities.length} entities:`, entities);
 
             for (const entity of entities.slice(0, 3)) {
                 const facts = await queryEntity(entity.name, 1);
-                console.log(`[Memory Retrieval] queryEntity("${entity.name}", 1) → ${facts.length} facts:`, facts);
                 for (const fact of facts) {
                     knowledgeItems.push({
                         subject: fact.subject,
@@ -86,7 +84,6 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
                 }
             }
 
-            console.log(`[Memory Retrieval] Knowledge items collected: ${knowledgeItems.length}`);
         } catch (err) {
             console.warn("[Memory Retrieval] Knowledge graph unavailable:", (err as Error).message);
         }
@@ -114,7 +111,6 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
             content: `[MEMORY CONTEXT — relevant information from past interactions]\n${textParts.join("\n")}\n[END MEMORY CONTEXT]`,
         });
 
-        console.log(`[Memory Retrieval] Returning ${episodicItems.length} episodic + ${knowledgeItems.length} knowledge items`);
 
         return {
             messages: [memoryContext],

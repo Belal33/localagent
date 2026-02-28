@@ -11,7 +11,7 @@ import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { storeEpisodicMemory } from "./episodic";
 import { upsertTriple, type KnowledgeTriple } from "./knowledge-graph";
 
-const ANTHROPIC_PROXY_URL = "http://localhost:8080";
+const ANTHROPIC_PROXY_URL = process.env.ANTHROPIC_PROXY_URL ?? "http://host.docker.internal:8080";
 
 // Fast, cheap LLM for extraction (gemini-3-flash via proxy)
 const distillerLLM = new ChatAnthropic({

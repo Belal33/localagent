@@ -1,7 +1,7 @@
 import { ChatAnthropic } from "@langchain/anthropic";
 
 // ─── Shared LLM Configuration for Planning Nodes ────────────────────────────
-const ANTHROPIC_PROXY_URL = "http://localhost:8080";
+const ANTHROPIC_PROXY_URL = process.env.ANTHROPIC_PROXY_URL ?? "http://host.docker.internal:8080";
 
 export const plannerLLM = new ChatAnthropic({
     model: "gemini-3-flash",
