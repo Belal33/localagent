@@ -57,7 +57,9 @@ export async function retrieveEpisodicMemories(
     query: string,
     limit: number = 5,
 ): Promise<EpisodicMemory[]> {
-    const queryEmbedding = await generateEmbedding(query);
+    // Truncate long queries to stay within embedding model context length
+    const truncatedQuery = query.length > 500 ? query.slice(0, 500) : query;
+    const queryEmbedding = await generateEmbedding(truncatedQuery);
     const vecStr = `[${queryEmbedding.join(",")}]`;
 
     const result = await pool.query(

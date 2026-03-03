@@ -3,6 +3,7 @@ import { z } from "zod";
 import { coreSkill } from "./core";
 import { filesystemSkill } from "./filesystem";
 import { camofoxSkill } from "./camofox";
+import { scrapingSkill } from "./scraping";
 
 /**
  * ─── Skill Registry ─────────────────────────────────────────────────────────
@@ -26,7 +27,7 @@ export interface Skill {
 // ─── Skill Registry ─────────────────────────────────────────────────────────
 // Add more skills here as needed (e.g., coding, research, data analysis)
 
-const allSkills: Skill[] = [coreSkill, filesystemSkill, camofoxSkill];
+const allSkills: Skill[] = [coreSkill, filesystemSkill, camofoxSkill, scrapingSkill];
 
 // ─── Placeholder Tool Prefix ────────────────────────────────────────────────
 const PLACEHOLDER_PREFIX = "use_";

@@ -3,6 +3,7 @@ FROM node:22-bookworm AS base
 WORKDIR /app
 COPY package.json package-lock.json ./
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PIP_ROOT_USER_ACTION=ignore
 RUN npm ci
 
 # Install Camoufox browser + dependencies for browser-based agent tools

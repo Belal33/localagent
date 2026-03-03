@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
         // Stream the graph execution
         const eventStream = graph.streamEvents(
             { messages: langchainMessages },
-            { ...config, version: "v2", recursionLimit: 100 }
+            { ...config, version: "v2", recursionLimit: 300 }
         );
 
         // Create NDJSON ReadableStream

@@ -183,7 +183,9 @@ export async function searchEntities(
 
     // ─── Try vector similarity search first ──────────────────────────────────
     try {
-        const queryEmbedding = await generateEmbedding(query);
+        // Truncate long queries to stay within embedding model context length
+        const truncatedQuery = query.length > 500 ? query.slice(0, 500) : query;
+        const queryEmbedding = await generateEmbedding(truncatedQuery);
         const session = driver.session();
         try {
             const result = await session.run(
