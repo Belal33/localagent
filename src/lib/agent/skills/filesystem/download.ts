@@ -1,6 +1,6 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { WORKSPACE_ROOT, runAsWithTimeout } from "./shared";
+import { WORKSPACE_ROOT, sanitizePath, runAsWithTimeout } from "./shared";
 
 // ─── Download Tool ──────────────────────────────────────────────────────────
 // Downloads run within the container workspace.
@@ -14,7 +14,7 @@ const downloadFile = new DynamicStructuredTool({
     }),
     func: async ({ url, savePath }) => {
         try {
-            const fullPath = `${WORKSPACE_ROOT}/${savePath}`;
+            const fullPath = `${WORKSPACE_ROOT}/${sanitizePath(savePath)}`;
             const { stdout } = await runAsWithTimeout(
                 `mkdir -p "$(dirname '${fullPath}')" && curl -fsSL -o '${fullPath}' '${url}' && stat --printf='%s' '${fullPath}'`,
                 60_000
