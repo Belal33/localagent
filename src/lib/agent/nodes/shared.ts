@@ -1,12 +1,13 @@
 import { ChatAnthropic } from "@langchain/anthropic";
 
 // ─── Shared LLM Configuration for Planning Nodes ────────────────────────────
-const ANTHROPIC_PROXY_URL = process.env.ANTHROPIC_PROXY_URL ?? "http://host.docker.internal:8080";
+const OPENCODE_API_KEY = process.env.OPENCODE_API_KEY;
+const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
 
 export const plannerLLM = new ChatAnthropic({
-    model: "gemini-3-flash",
+    model: "glm-5",
     maxTokens: 4096,
     temperature: 0.2,
-    apiKey: "not-needed",
-    clientOptions: { baseURL: ANTHROPIC_PROXY_URL },
+    anthropicApiKey: OPENCODE_API_KEY,
+    anthropicApiUrl: OPENCODE_BASE_URL,
 });

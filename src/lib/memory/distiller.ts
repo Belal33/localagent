@@ -11,15 +11,16 @@ import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { storeEpisodicMemory } from "./episodic";
 import { upsertTriple, type KnowledgeTriple } from "./knowledge-graph";
 
-const ANTHROPIC_PROXY_URL = process.env.ANTHROPIC_PROXY_URL ?? "http://host.docker.internal:8080";
+const OPENCODE_API_KEY = process.env.OPENCODE_API_KEY;
+const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
 
-// Fast, cheap LLM for extraction (gemini-3-flash via proxy)
+// Fast LLM for extraction (GLM-5 via OpenCode Go)
 const distillerLLM = new ChatAnthropic({
-    model: "gemini-3-flash",
+    model: "glm-5",
     maxTokens: 4096,
     temperature: 0.1,
-    apiKey: "not-needed",
-    clientOptions: { baseURL: ANTHROPIC_PROXY_URL },
+    anthropicApiKey: OPENCODE_API_KEY,
+    anthropicApiUrl: OPENCODE_BASE_URL,
 });
 
 interface DistillerOutput {

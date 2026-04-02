@@ -21,7 +21,8 @@ import { memoryRetrievalNode } from "./nodes/memory-retrieval";
 import { getCheckpointer } from "@/lib/memory/db";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
-const ANTHROPIC_PROXY_URL = process.env.ANTHROPIC_PROXY_URL;
+const OPENCODE_API_KEY = process.env.OPENCODE_API_KEY;
+const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
 
 // ─── Register ALL possible tools (for ToolNode execution) ───────────────────
 const allTools = getAllPossibleTools();
@@ -41,17 +42,13 @@ const SYSTEM_PROMPT = new SystemMessage(
   "Be concise, helpful, and precise."
 );
 
-// ─── LLM via Antigravity Claude Proxy ───────────────────────────────────────
+// ─── LLM via OpenCode Go (GLM-5) ───────────────────────────────────────────
 const llm = new ChatAnthropic({
-  // model: "gemini-3-flash",
-  // model: "claude-opus-4-6-thinking",
-  model: "claude-sonnet-4-6",
+  model: "glm-5",
   maxTokens: 64000,
   temperature: 0.1,
-  apiKey: "not-needed",
-  clientOptions: {
-    baseURL: ANTHROPIC_PROXY_URL,
-  },
+  anthropicApiKey: OPENCODE_API_KEY,
+  anthropicApiUrl: OPENCODE_BASE_URL,
 });
 
 // ─── Extended State (adds classification field for routing) ─────────────────
