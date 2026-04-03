@@ -3,20 +3,12 @@
  *
  * Memory Retrieval Node — runs BEFORE the classifier.
  *
- * Enriches the agent's context with:
- *   1. Relevant episodic memories (pgvector cosine similarity search)
- *   2. Related knowledge graph facts (Neo4j entity queries)
- *
- * Injects results as a HumanMessage with a [MEMORY CONTEXT] wrapper so
- * the classifier and subsequent agent nodes can reason over past interactions.
- *
- * Graceful degradation: any failure (DB unavailable, Ollama down, etc.)
- * is caught silently — the node returns {} so the graph continues normally.
+ * Enriches the agent's context by querying the external Cognee Memory Engine
+ * which automatically handles navigating both vector embeddings and semantic graph trips.
  */
 import { HumanMessage } from "@langchain/core/messages";
-import { retrieveEpisodicMemories } from "@/lib/memory/episodic";
-import { queryEntity, searchEntities } from "@/lib/memory/knowledge-graph";
 
+const COGNEE_BASE_URL = process.env.COGNEE_URL || "http://127.0.0.1:8001";
 const USER_ID = "default"; // Single-user mode; extend via session config when needed
 
 export async function memoryRetrievalNode(state: { messages: unknown[] }) {
@@ -39,82 +31,42 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
 
         if (!userQuery.trim()) return {};
 
-
-
-        // Structured data for client display
-        const episodicItems: Array<{ date: string; summary: string; relevance: number | null }> = [];
-        const knowledgeItems: Array<{ subject: string; subjectType: string; predicate: string; object: string; objectType: string }> = [];
-
-        // ─── 1. Episodic Memory: semantic similarity via pgvector ─────────────
+        // ─── Cognee Combined Hybrid Search ──────────────────────────────────────
+        let memoryItems: string[] = [];
         try {
-            const episodic = await retrieveEpisodicMemories(USER_ID, userQuery, 3);
-            if (episodic.length > 0) {
+            const searchRes = await fetch(`${COGNEE_BASE_URL}/api/v1/search?query=${encodeURIComponent(userQuery)}`, {
+                method: "GET",
+                headers: { "Content-Type": "application/json" }
+            });
 
-                for (const mem of episodic) {
-                    const date = mem.createdAt.toLocaleDateString();
-                    const rel = mem.similarity != null
-                        ? ` (relevance: ${(mem.similarity * 100).toFixed(0)}%)`
-                        : "";
-
-                    episodicItems.push({
-                        date,
-                        summary: mem.summary,
-                        relevance: mem.similarity != null ? Math.round(mem.similarity * 100) : null,
-                    });
+            if (searchRes.ok) {
+                const results = await searchRes.json();
+                // Depending on Cognee's output schema, we parse the results into string fragments
+                // Defaulting to extracting `.text` or passing raw chunks back to the prompt
+                if (Array.isArray(results)) {
+                    memoryItems = results.map((r: any) => `- ${r.text || JSON.stringify(r)}`);
+                } else if (results.results && Array.isArray(results.results)) {
+                    memoryItems = results.results.map((r: any) => `- ${r.text || JSON.stringify(r)}`);
+                } else {
+                    memoryItems = [`- ${JSON.stringify(results)}`];
                 }
             }
         } catch (err) {
-            console.warn("[Memory Retrieval] Episodic store unavailable:", (err as Error).message);
+            console.warn("[Memory Retrieval] Cognee engine unavailable:", (err as Error).message);
         }
 
-        // ─── 2. Semantic Memory: entity facts via Neo4j ───────────────────────
-        try {
-            const entities = await searchEntities(userQuery, 5);
+        // ─── Inject memory context ─────────────────────────────────────────
+        if (memoryItems.length === 0) return {};
 
-            for (const entity of entities.slice(0, 3)) {
-                const facts = await queryEntity(entity.name, 1);
-                for (const fact of facts) {
-                    knowledgeItems.push({
-                        subject: fact.subject,
-                        subjectType: fact.subjectType,
-                        predicate: fact.predicate,
-                        object: fact.object,
-                        objectType: fact.objectType,
-                    });
-                }
-            }
-
-        } catch (err) {
-            console.warn("[Memory Retrieval] Knowledge graph unavailable:", (err as Error).message);
-        }
-
-        // ─── 3. Inject memory context ─────────────────────────────────────────
-        if (episodicItems.length === 0 && knowledgeItems.length === 0) return {};
-
-        // Build the text for the LLM
-        const textParts: string[] = [];
-        if (episodicItems.length > 0) {
-            textParts.push("## Past Conversations");
-            for (const e of episodicItems) {
-                const rel = e.relevance != null ? ` (relevance: ${e.relevance}%)` : "";
-                textParts.push(`- [${e.date}] ${e.summary}${rel}`);
-            }
-        }
-        if (knowledgeItems.length > 0) {
-            textParts.push("\n## Known Facts");
-            for (const f of knowledgeItems) {
-                textParts.push(`- ${f.subject} (${f.subjectType}) —[${f.predicate}]→ ${f.object} (${f.objectType})`);
-            }
-        }
+        const textParts = ["## Relevant Memory and Known Facts from past interactions:", ...memoryItems];
 
         const memoryContext = new HumanMessage({
             content: `[MEMORY CONTEXT — relevant information from past interactions]\n${textParts.join("\n")}\n[END MEMORY CONTEXT]`,
         });
 
-
         return {
             messages: [memoryContext],
-            retrievedMemory: { episodic: episodicItems, knowledge: knowledgeItems },
+            retrievedMemory: { rawSearch: memoryItems },
         };
     } catch (err) {
         // Top-level catch: never crash the graph due to memory failures

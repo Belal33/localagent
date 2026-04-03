@@ -4,7 +4,7 @@ import {
   END,
 } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { ChatAnthropic } from "@langchain/anthropic";
+import { ChatOpenAI } from "@langchain/openai";
 import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 import {
   getToolsForState,
@@ -21,8 +21,24 @@ import { memoryRetrievalNode } from "./nodes/memory-retrieval";
 import { getCheckpointer } from "@/lib/memory/db";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
-const OPENCODE_API_KEY = process.env.OPENCODE_API_KEY;
 const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
+
+// ─── LLM via OpenCode Zen (OpenAI-compatible) — lazily initialized ──────────
+let _llm: ChatOpenAI | null = null;
+function getLLM(): ChatOpenAI {
+  if (!_llm) {
+    _llm = new ChatOpenAI({
+      model: "minimax-m2.7",
+      maxTokens: 64000,
+      temperature: 0.1,
+      configuration: {
+        apiKey: process.env.OPENCODE_API_KEY,
+        baseURL: OPENCODE_BASE_URL,
+      },
+    });
+  }
+  return _llm;
+}
 
 // ─── Register ALL possible tools (for ToolNode execution) ───────────────────
 const allTools = getAllPossibleTools();
@@ -42,14 +58,6 @@ const SYSTEM_PROMPT = new SystemMessage(
   "Be concise, helpful, and precise."
 );
 
-// ─── LLM via OpenCode Go (GLM-5) ───────────────────────────────────────────
-const llm = new ChatAnthropic({
-  model: "glm-5",
-  maxTokens: 64000,
-  temperature: 0.1,
-  anthropicApiKey: OPENCODE_API_KEY,
-  anthropicApiUrl: OPENCODE_BASE_URL,
-});
 
 // ─── Extended State (adds classification field for routing) ─────────────────
 const GraphAnnotation = Annotation.Root({
@@ -65,7 +73,7 @@ async function callModel(state: typeof GraphAnnotation.State) {
   const { messages, activeSkills } = state;
   // Dynamically compute the tools the agent should see
   const currentTools = getToolsForState(activeSkills);
-  const llmWithTools = llm.bindTools(currentTools);
+  const llmWithTools = getLLM().bindTools(currentTools);
   const response = await llmWithTools.invoke([SYSTEM_PROMPT, ...messages]);
   return { messages: [response] };
 }

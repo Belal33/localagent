@@ -7,7 +7,7 @@
 
 import { SystemMessage } from "@langchain/core/messages";
 import type { AgentState } from "../state";
-import { plannerLLM } from "./shared";
+import { getPlannerLLM } from "./shared";
 
 const CLASSIFIER_SYSTEM = new SystemMessage(
     "You are a request classifier. Given a user message, determine if it requires " +
@@ -37,7 +37,7 @@ export async function classifierNode(
         return { classification: "simple" };
     }
 
-    const response = await plannerLLM.invoke([CLASSIFIER_SYSTEM, lastUserMsg]);
+    const response = await getPlannerLLM().invoke([CLASSIFIER_SYSTEM, lastUserMsg]);
 
     let text = (typeof response.content === "string"
         ? response.content

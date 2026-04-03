@@ -87,6 +87,34 @@ services:
       retries: 5
       start_period: 15s
 
+  # ── Cognee AI Memory Engine ─────────────────────────────────────────────
+  cognee:
+    profiles: [ "cognee" ]
+    image: ghcr.io/topoteretes/cognee:latest
+    container_name: agent_cognee
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      # Automatically pass the opencode LLM keys
+      - LLM_API_KEY=${OPENCODE_API_KEY}
+      - HTTP_PROXY=${OPENCODE_BASE_URL}
+      # Use local Ollama for embeddings
+      - EMBEDDING_PROVIDER=ollama
+      - EMBEDDING_MODEL=nomic-embed-text:latest
+      - EMBEDDING_ENDPOINT=http://host.docker.internal:11434/api/embed
+      - VECTOR_DB_PROVIDER=pgvector
+      - VECTOR_DB_URL=postgresql://agent:agent_local_dev@postgres:5432/agent_memory
+      - GRAPH_DATABASE_PROVIDER=neo4j
+      - GRAPH_DATABASE_URL=bolt://neo4j:7687
+      - GRAPH_DATABASE_USERNAME=neo4j
+      - GRAPH_DATABASE_PASSWORD=agent_local_dev
+    depends_on:
+      - postgres
+      - neo4j
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   pgdata:
   neo4jdata:

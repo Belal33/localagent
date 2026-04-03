@@ -43,6 +43,7 @@ COPY . .
 # Runtime values come from .env.local via docker-compose.
 ENV TAVILY_API_KEY=build-placeholder
 ENV ANTHROPIC_PROXY_URL=http://localhost:8080
+ENV OPENCODE_API_KEY=build-placeholder
 ENV AGENT_PG_URI=postgresql://x:x@localhost/x
 ENV AGENT_NEO4J_URI=bolt://localhost:7687
 RUN npm run build

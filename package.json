@@ -19,6 +19,7 @@
     "@langchain/langgraph": "^1.1.4",
     "@langchain/langgraph-checkpoint-postgres": "^1.0.1",
     "@langchain/ollama": "^1.2.2",
+    "@langchain/openai": "^1.4.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@tavily/core": "^0.7.1",
     "@types/react-syntax-highlighter": "^15.5.13",
@@ -47,6 +48,6 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "5.9.3"
   }
 }
