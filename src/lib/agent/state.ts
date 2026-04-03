@@ -77,6 +77,18 @@ export const AgentAnnotation = Annotation.Root({
         reducer: (_, next) => next,
         default: () => null,
     }),
+
+    /**
+     * Episodic memory — timestamped summaries of past conversations.
+     * Gives the agent context about prior interaction history.
+     */
+    retrievedEpisodes: Annotation<Array<{
+        date: string;
+        summary: string;
+    }> | null>({
+        reducer: (_, next) => next,
+        default: () => null,
+    }),
 });
 
 export type AgentState = typeof AgentAnnotation.State;

@@ -6,7 +6,7 @@ import MarkdownRenderer from "./components/MarkdownRenderer";
 import ApprovalCard from "./components/ApprovalCard";
 import PlanDisplay from "./components/PlanDisplay";
 import ActivityLog, { type ActivityItem } from "./components/ActivityLog";
-import MemoryContext, { type MemoryItem } from "./components/MemoryContext";
+import MemoryContext, { type MemoryItem, type EpisodicMemory } from "./components/MemoryContext";
 import SettingsPanel, { type ModelSettings, DEFAULT_SETTINGS, GO_MODELS } from "./components/SettingsPanel";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ type StreamEvent =
   | { type: "tool_call"; tool: string; args: Record<string, unknown>; id: string }
   | { type: "tool_result"; tool: string; output: string; id: string }
   | { type: "node_start"; node: string }
-  | { type: "memory"; memories: MemoryItem[]; contextText: string }
+  | { type: "memory"; memories: MemoryItem[]; episodes: EpisodicMemory[]; contextText: string }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -106,6 +106,7 @@ export default function AgentInterface() {
   const [interrupt, setInterrupt] = useState<InterruptData | null>(null);
   const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [episodes, setEpisodes] = useState<EpisodicMemory[]>([]);
   const [memoryContextText, setMemoryContextText] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -211,6 +212,7 @@ export default function AgentInterface() {
 
           case "memory":
             setMemories(event.memories);
+            setEpisodes(event.episodes || []);
             setMemoryContextText(event.contextText || "");
             break;
 
@@ -275,6 +277,7 @@ export default function AgentInterface() {
     setPlanSteps([]);
     setActivityItems([]);
     setMemories([]);
+    setEpisodes([]);
     setMemoryContextText("");
 
     try {
@@ -448,7 +451,7 @@ export default function AgentInterface() {
           ))}
 
           {/* Memory Context */}
-          {memories.length > 0 && (
+          {(memories.length > 0 || episodes.length > 0) && (
             <div className="flex gap-3 justify-start animate-fade-in">
               <div className="w-8 h-8 rounded-lg bg-purple-950/60 border border-purple-900/40 flex items-center justify-center shrink-0 mt-0.5">
                 <TerminalSquare
@@ -456,7 +459,7 @@ export default function AgentInterface() {
                   size={16}
                 />
               </div>
-              <MemoryContext memories={memories} contextText={memoryContextText} />
+              <MemoryContext memories={memories} episodes={episodes} contextText={memoryContextText} />
             </div>
           )}
 

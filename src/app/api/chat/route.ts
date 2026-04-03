@@ -154,12 +154,16 @@ export async function POST(req: NextRequest) {
                                 const memState = await graph.getState(config);
                                 const vals = memState.values as any;
                                 const mem = vals?.retrievedMemory;
+                                const episodes = vals?.retrievedEpisodes;
                                 const contextText = vals?.memoryContextText;
-                                if (Array.isArray(mem) && mem.length > 0) {
+                                const hasMemory = (Array.isArray(mem) && mem.length > 0);
+                                const hasEpisodes = (Array.isArray(episodes) && episodes.length > 0);
+                                if (hasMemory || hasEpisodes) {
                                     controller.enqueue(
                                         ndjsonLine({
                                             type: "memory",
-                                            memories: mem,
+                                            memories: mem || [],
+                                            episodes: episodes || [],
                                             contextText: contextText || "",
                                         })
                                     );
