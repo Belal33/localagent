@@ -152,12 +152,15 @@ export async function POST(req: NextRequest) {
                         if (event === "on_chain_end" && langgraph_node === "memoryRetrieval") {
                             try {
                                 const memState = await graph.getState(config);
-                                const mem = (memState.values as any)?.retrievedMemory;
+                                const vals = memState.values as any;
+                                const mem = vals?.retrievedMemory;
+                                const contextText = vals?.memoryContextText;
                                 if (Array.isArray(mem) && mem.length > 0) {
                                     controller.enqueue(
                                         ndjsonLine({
                                             type: "memory",
                                             memories: mem,
+                                            contextText: contextText || "",
                                         })
                                     );
                                 }

@@ -3,12 +3,13 @@
  *
  * Memory Retrieval Node — runs BEFORE the classifier.
  *
- * Enriches the agent's context by querying the external Cognee Memory Engine
- * using CHUNKS search to retrieve actual stored text fragments.
+ * Enriches the agent's context by querying the external Cognee Memory Engine.
+ * Uses a dual-search strategy (CHUNKS + SUMMARIES) to maximize recall:
+ *   - CHUNKS: raw stored text fragments (includes actual knowledge like user profile)
+ *   - SUMMARIES: synthesized knowledge titles (higher-level context)
  *
- * GRAPH_COMPLETION was previously used but returns LLM-generated summaries
- * that are too generic for UI display. CHUNKS returns the raw stored data
- * which is both better for display AND gives the agent richer context.
+ * Filters out echo noise (stored user queries like "User: what is my name")
+ * and deduplicates results before injecting into the agent's context.
  */
 import { HumanMessage } from "@langchain/core/messages";
 
@@ -17,10 +18,50 @@ const COGNEE_BASE_URL = process.env.COGNEE_URL || "http://cognee:8000";
 /** Minimum text length to consider a chunk as meaningful memory */
 const MIN_CHUNK_LENGTH = 10;
 
+/**
+ * Pattern to identify echoed user messages that were stored as chunks.
+ * These are noise — just the raw queries, not actual knowledge.
+ */
+const USER_ECHO_PATTERN = /^(User|Assistant|Human|AI):\s/i;
+
 export interface MemoryChunk {
     text: string;
     score: number | null;
-    source: string;
+    source: "chunk" | "summary";
+}
+
+/** Run a single Cognee search and return raw results */
+async function cogneeSearch(query: string, searchType: string, topK: number): Promise<unknown[]> {
+    try {
+        const res = await fetch(`${COGNEE_BASE_URL}/api/v1/search`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                query,
+                search_type: searchType,
+                top_k: topK,
+            }),
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            return Array.isArray(data) ? data : [];
+        }
+        console.warn(`[Memory Retrieval] ${searchType} search failed:`, res.status);
+        return [];
+    } catch (err) {
+        console.warn(`[Memory Retrieval] ${searchType} search error:`, (err as Error).message);
+        return [];
+    }
+}
+
+/** Extract text from a Cognee result item */
+function extractText(item: unknown): string {
+    if (typeof item === "string") return item.trim();
+    if (item && typeof item === "object") {
+        return String((item as Record<string, unknown>).text || "").trim();
+    }
+    return "";
 }
 
 export async function memoryRetrievalNode(state: { messages: unknown[] }) {
@@ -43,49 +84,51 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
 
         if (!userQuery.trim()) return {};
 
-        // ─── Cognee Search — POST /api/v1/search (CHUNKS) ───────────────────
-        let memoryChunks: MemoryChunk[] = [];
+        // ─── Dual Search: CHUNKS + SUMMARIES in parallel ────────────────────
+        const [chunkResults, summaryResults] = await Promise.all([
+            cogneeSearch(userQuery, "CHUNKS", 10),
+            cogneeSearch(userQuery, "SUMMARIES", 5),
+        ]);
 
-        try {
-            const searchRes = await fetch(`${COGNEE_BASE_URL}/api/v1/search`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    query: userQuery,
-                    search_type: "CHUNKS",
-                    top_k: 5,
-                }),
+        console.log(`[Memory Retrieval] Got ${chunkResults.length} chunks, ${summaryResults.length} summaries`);
+
+        // ─── Process and filter results ────────────────────────────────────
+        const seen = new Set<string>();
+        const memoryChunks: MemoryChunk[] = [];
+
+        // Process chunks first (higher-value raw data)
+        for (const item of chunkResults) {
+            const text = extractText(item);
+            const normalized = text.toLowerCase();
+
+            // Skip short, duplicate, or echo chunks
+            if (text.length < MIN_CHUNK_LENGTH) continue;
+            if (seen.has(normalized)) continue;
+            if (USER_ECHO_PATTERN.test(text)) continue;
+
+            seen.add(normalized);
+            memoryChunks.push({
+                text,
+                score: typeof (item as any)?.feedback_weight === "number"
+                    ? (item as any).feedback_weight : null,
+                source: "chunk",
             });
+        }
 
-            if (searchRes.ok) {
-                const results = await searchRes.json();
-                console.log("[Memory Retrieval] Raw Cognee CHUNKS response:", JSON.stringify(results).slice(0, 500));
+        // Process summaries (synthesized knowledge titles)
+        for (const item of summaryResults) {
+            const text = extractText(item);
+            const normalized = text.toLowerCase();
 
-                // CHUNKS returns: [{ text: "...", id: "...", feedback_weight: 0.5, ... }]
-                const items: unknown[] = Array.isArray(results) ? results : [];
+            if (text.length < MIN_CHUNK_LENGTH) continue;
+            if (seen.has(normalized)) continue;
 
-                for (const r of items) {
-                    if (r && typeof r === "object") {
-                        const obj = r as Record<string, unknown>;
-                        const text = String(obj.text || "").trim();
-
-                        // Filter out trivial chunks (bare greetings, single words, etc.)
-                        if (text.length >= MIN_CHUNK_LENGTH) {
-                            memoryChunks.push({
-                                text,
-                                score: typeof obj.feedback_weight === "number" ? obj.feedback_weight : null,
-                                source: "cognee",
-                            });
-                        }
-                    } else if (typeof r === "string" && r.trim().length >= MIN_CHUNK_LENGTH) {
-                        memoryChunks.push({ text: r.trim(), score: null, source: "cognee" });
-                    }
-                }
-            } else {
-                console.warn("[Memory Retrieval] Cognee search failed:", searchRes.status, await searchRes.text());
-            }
-        } catch (err) {
-            console.warn("[Memory Retrieval] Cognee engine unavailable:", (err as Error).message);
+            seen.add(normalized);
+            memoryChunks.push({
+                text,
+                score: null,
+                source: "summary",
+            });
         }
 
         // ─── Inject memory context ─────────────────────────────────────────
@@ -93,15 +136,15 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
 
         const memoryLines = memoryChunks.map((c) => `- ${c.text}`);
         const textParts = ["## Relevant Memory from past interactions:", ...memoryLines];
+        const contextText = `[MEMORY CONTEXT — relevant information from past interactions]\n${textParts.join("\n")}\n[END MEMORY CONTEXT]`;
 
-        const memoryContextMsg = new HumanMessage({
-            content: `[MEMORY CONTEXT — relevant information from past interactions]\n${textParts.join("\n")}\n[END MEMORY CONTEXT]`,
-        });
+        const memoryContextMsg = new HumanMessage({ content: contextText });
 
-        console.log(`[Memory Retrieval] Injecting ${memoryChunks.length} memory chunks`);
+        console.log(`[Memory Retrieval] Injecting ${memoryChunks.length} memory items (after filtering)`);
 
         return {
             messages: [memoryContextMsg],
+            memoryContextText: contextText,
             retrievedMemory: memoryChunks,
         };
     } catch (err) {

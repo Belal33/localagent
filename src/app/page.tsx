@@ -43,7 +43,7 @@ type StreamEvent =
   | { type: "tool_call"; tool: string; args: Record<string, unknown>; id: string }
   | { type: "tool_result"; tool: string; output: string; id: string }
   | { type: "node_start"; node: string }
-  | { type: "memory"; memories: MemoryItem[] }
+  | { type: "memory"; memories: MemoryItem[]; contextText: string }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -106,6 +106,7 @@ export default function AgentInterface() {
   const [interrupt, setInterrupt] = useState<InterruptData | null>(null);
   const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [memoryContextText, setMemoryContextText] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -210,6 +211,7 @@ export default function AgentInterface() {
 
           case "memory":
             setMemories(event.memories);
+            setMemoryContextText(event.contextText || "");
             break;
 
           case "interrupt":
@@ -273,6 +275,7 @@ export default function AgentInterface() {
     setPlanSteps([]);
     setActivityItems([]);
     setMemories([]);
+    setMemoryContextText("");
 
     try {
       const response = await fetch("/api/chat", {
@@ -453,7 +456,7 @@ export default function AgentInterface() {
                   size={16}
                 />
               </div>
-              <MemoryContext memories={memories} />
+              <MemoryContext memories={memories} contextText={memoryContextText} />
             </div>
           )}
 

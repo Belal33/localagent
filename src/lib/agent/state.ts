@@ -57,6 +57,15 @@ export const AgentAnnotation = Annotation.Root({
 
     // ─── Phase 4: Memory Context ─────────────────────────────────────
     /**
+     * The exact text injected into the agent's message stream.
+     * Shown in the UI so users can see exactly what the agent reasons over.
+     */
+    memoryContextText: Annotation<string>({
+        reducer: (_, next) => next,
+        default: () => "",
+    }),
+
+    /**
      * Structured memory chunks for client-side display.
      * Set by the memoryRetrieval node with actual stored text from Cognee CHUNKS search.
      */

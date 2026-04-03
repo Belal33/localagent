@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Brain, ChevronDown, ChevronRight, MessageSquare } from "lucide-react";
+import { Brain, ChevronDown, ChevronRight, Eye, MessageSquare } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -13,12 +13,14 @@ export interface MemoryItem {
 
 interface MemoryContextProps {
     memories: MemoryItem[];
+    contextText: string;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-export default function MemoryContext({ memories }: MemoryContextProps) {
+export default function MemoryContext({ memories, contextText }: MemoryContextProps) {
     const [isExpanded, setIsExpanded] = useState(false);
+    const [showRaw, setShowRaw] = useState(false);
 
     if (memories.length === 0) return null;
 
@@ -44,15 +46,48 @@ export default function MemoryContext({ memories }: MemoryContextProps) {
 
             {/* ─── Expanded Content ───────────────────────────────────────── */}
             {isExpanded && (
-                <div className="px-4 pb-3 space-y-3 border-t border-purple-900/20">
-                    <div className="mt-3">
-                        <div className="flex items-center gap-1.5 mb-2">
-                            <MessageSquare size={12} className="text-purple-400" />
-                            <span className="text-[11px] font-medium text-purple-300">
-                                Recalled Memories
-                            </span>
+                <div className="px-4 pb-3 border-t border-purple-900/20">
+                    {/* Toggle between structured view and raw agent view */}
+                    <div className="flex items-center gap-2 mt-3 mb-2">
+                        <button
+                            onClick={() => setShowRaw(false)}
+                            className={`flex items-center gap-1 text-[11px] px-2 py-1 rounded-md transition-colors ${
+                                !showRaw
+                                    ? "bg-purple-900/40 text-purple-200 font-medium"
+                                    : "text-purple-500 hover:text-purple-300"
+                            }`}
+                        >
+                            <MessageSquare size={11} />
+                            Memories
+                        </button>
+                        <button
+                            onClick={() => setShowRaw(true)}
+                            className={`flex items-center gap-1 text-[11px] px-2 py-1 rounded-md transition-colors ${
+                                showRaw
+                                    ? "bg-purple-900/40 text-purple-200 font-medium"
+                                    : "text-purple-500 hover:text-purple-300"
+                            }`}
+                        >
+                            <Eye size={11} />
+                            What Agent Sees
+                        </button>
+                    </div>
+
+                    {showRaw ? (
+                        /* ─── Raw Injected Context (exactly what the agent gets) ── */
+                        <div className="mt-1">
+                            <pre className="text-[11px] leading-relaxed text-purple-200/70 bg-purple-950/40 
+                                          border border-purple-900/30 rounded-lg p-3 font-mono whitespace-pre-wrap 
+                                          overflow-x-auto max-h-[300px] overflow-y-auto custom-scrollbar">
+                                {contextText || "No context injected"}
+                            </pre>
+                            <p className="text-[10px] text-purple-600 mt-1.5 italic">
+                                This text is injected as a HumanMessage before the classifier node processes the query.
+                            </p>
                         </div>
-                        <div className="space-y-2">
+                    ) : (
+                        /* ─── Structured Memory List ─────────────────────────── */
+                        <div className="space-y-2 mt-1">
                             {memories.map((mem, idx) => (
                                 <div
                                     key={`mem-${idx}`}
@@ -67,7 +102,7 @@ export default function MemoryContext({ memories }: MemoryContextProps) {
                                 </div>
                             ))}
                         </div>
-                    </div>
+                    )}
                 </div>
             )}
         </div>
