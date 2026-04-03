@@ -8,7 +8,7 @@
  */
 import { type BaseMessage } from "@langchain/core/messages";
 
-const COGNEE_BASE_URL = process.env.COGNEE_URL || "http://127.0.0.1:8001";
+const COGNEE_BASE_URL = process.env.COGNEE_URL || "http://cognee:8000";
 
 interface DistillerOutput {
     summary: string;
@@ -48,21 +48,26 @@ export async function distillConversation(
     try {
         console.log(`[Memory Distiller] Sending thread=${threadId} to Cognee Service...`);
         
-        // 1. Add interaction text
-        const addRes = await fetch(`${COGNEE_BASE_URL}/api/v1/datasets/add`, {
+        // 1. Add interaction text — POST /api/v1/add (multipart/form-data required)
+        const formData = new FormData();
+        formData.append(
+            "data",
+            new Blob([conversationText], { type: "text/plain" }),
+            `${threadId}.txt`,
+        );
+        formData.append("datasetName", `chat_${threadId}`);
+
+        const addRes = await fetch(`${COGNEE_BASE_URL}/api/v1/add`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-                data: conversationText, 
-                dataset_name: `chat_${threadId}` 
-            })
+            // Do NOT set Content-Type — fetch auto-sets multipart boundary
+            body: formData,
         });
 
         if (!addRes.ok) {
             console.warn(`[Memory Distiller] Failed to add dataset. ${await addRes.text()}`);
         }
 
-        // 2. Form memory structure (Cognify)
+        // 2. Form memory structure (Cognify) — POST /api/v1/cognify
         const cognifyRes = await fetch(`${COGNEE_BASE_URL}/api/v1/cognify`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },

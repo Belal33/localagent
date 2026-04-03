@@ -17,6 +17,7 @@ services:
       - postgres
       - neo4j
       - scrapling-mcp
+      - cognee
     env_file:
       - .env.local
     extra_hosts:
@@ -38,6 +39,7 @@ services:
       - postgres
       - neo4j
       - scrapling-mcp
+      - cognee
     env_file:
       - .env.local
     extra_hosts:
@@ -81,7 +83,7 @@ services:
     ports:
       - "8931:8931"
     healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8931/mcp')" ]
+      test: [ "CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost', 8931), timeout=5); s.close()" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -89,26 +91,43 @@ services:
 
   # ── Cognee AI Memory Engine ─────────────────────────────────────────────
   cognee:
-    profiles: [ "cognee" ]
-    image: ghcr.io/topoteretes/cognee:latest
+    image: cognee/cognee:latest
     container_name: agent_cognee
     restart: unless-stopped
     ports:
       - "8001:8000"
+    volumes:
+      - cogneedata:/app/cognee/.data_storage
+    env_file:
+      - .env.local
     environment:
-      # Automatically pass the opencode LLM keys
-      - LLM_API_KEY=${OPENCODE_API_KEY}
-      - HTTP_PROXY=${OPENCODE_BASE_URL}
-      # Use local Ollama for embeddings
+      # ─── LLM (uses OpenCode custom endpoint) ─────────
+      # LLM_API_KEY is loaded from .env.local (env_file above)
+      - LLM_PROVIDER=custom
+      - LLM_MODEL=openai/minimax-m2.5
+      - LLM_ENDPOINT=https://opencode.ai/zen/go/v1
+      - COGNEE_SKIP_CONNECTION_TEST=true
+      # ─── Embeddings (uses local Ollama) ──────────────
       - EMBEDDING_PROVIDER=ollama
-      - EMBEDDING_MODEL=nomic-embed-text:latest
+      - EMBEDDING_MODEL=mxbai-embed-large:latest
       - EMBEDDING_ENDPOINT=http://host.docker.internal:11434/api/embed
+      - EMBEDDING_DIMENSIONS=1024
+      - HUGGINGFACE_TOKENIZER=mixedbread-ai/mxbai-embed-large-v1
       - VECTOR_DB_PROVIDER=pgvector
       - VECTOR_DB_URL=postgresql://agent:agent_local_dev@postgres:5432/agent_memory
       - GRAPH_DATABASE_PROVIDER=neo4j
       - GRAPH_DATABASE_URL=bolt://neo4j:7687
       - GRAPH_DATABASE_USERNAME=neo4j
       - GRAPH_DATABASE_PASSWORD=agent_local_dev
+      # Use Postgres for internal relational state (fixes sqlite3 error)
+      - DB_PROVIDER=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USERNAME=agent
+      - DB_PASSWORD=agent_local_dev
+      - DB_NAME=agent_memory
+      - ENABLE_BACKEND_ACCESS_CONTROL=false
+      - REQUIRE_AUTHENTICATION=false
     depends_on:
       - postgres
       - neo4j
@@ -118,3 +137,4 @@ services:
 volumes:
   pgdata:
   neo4jdata:
+  cogneedata:

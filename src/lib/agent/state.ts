@@ -57,23 +57,14 @@ export const AgentAnnotation = Annotation.Root({
 
     // ─── Phase 4: Memory Context ─────────────────────────────────────
     /**
-     * Injected by the memoryRetrieval node before the classifier.
-     * Contains relevant episodic memories and knowledge graph facts
-     * formatted as a human-readable string for the agent to reason over.
+     * Structured memory chunks for client-side display.
+     * Set by the memoryRetrieval node with actual stored text from Cognee CHUNKS search.
      */
-    memoryContext: Annotation<string>({
-        reducer: (_, next) => next,
-        default: () => "",
-    }),
-
-    /**
-     * Structured memory data for client-side display.
-     * Set by the memoryRetrieval node alongside the text-based memoryContext.
-     */
-    retrievedMemory: Annotation<{
-        episodic: Array<{ date: string; summary: string; relevance: number | null }>;
-        knowledge: Array<{ subject: string; subjectType: string; predicate: string; object: string; objectType: string }>;
-    } | null>({
+    retrievedMemory: Annotation<Array<{
+        text: string;
+        score: number | null;
+        source: string;
+    }> | null>({
         reducer: (_, next) => next,
         default: () => null,
     }),

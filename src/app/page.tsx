@@ -6,7 +6,7 @@ import MarkdownRenderer from "./components/MarkdownRenderer";
 import ApprovalCard from "./components/ApprovalCard";
 import PlanDisplay from "./components/PlanDisplay";
 import ActivityLog, { type ActivityItem } from "./components/ActivityLog";
-import MemoryContext, { type EpisodicMemory, type KnowledgeFact } from "./components/MemoryContext";
+import MemoryContext, { type MemoryItem } from "./components/MemoryContext";
 import SettingsPanel, { type ModelSettings, DEFAULT_SETTINGS, GO_MODELS } from "./components/SettingsPanel";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ type StreamEvent =
   | { type: "tool_call"; tool: string; args: Record<string, unknown>; id: string }
   | { type: "tool_result"; tool: string; output: string; id: string }
   | { type: "node_start"; node: string }
-  | { type: "memory"; episodic: EpisodicMemory[]; knowledge: KnowledgeFact[] }
+  | { type: "memory"; memories: MemoryItem[] }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -105,8 +105,7 @@ export default function AgentInterface() {
   const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
   const [interrupt, setInterrupt] = useState<InterruptData | null>(null);
   const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
-  const [memoryEpisodic, setMemoryEpisodic] = useState<EpisodicMemory[]>([]);
-  const [memoryKnowledge, setMemoryKnowledge] = useState<KnowledgeFact[]>([]);
+  const [memories, setMemories] = useState<MemoryItem[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -210,8 +209,7 @@ export default function AgentInterface() {
             break;
 
           case "memory":
-            setMemoryEpisodic(event.episodic);
-            setMemoryKnowledge(event.knowledge);
+            setMemories(event.memories);
             break;
 
           case "interrupt":
@@ -274,8 +272,7 @@ export default function AgentInterface() {
     setInterrupt(null);
     setPlanSteps([]);
     setActivityItems([]);
-    setMemoryEpisodic([]);
-    setMemoryKnowledge([]);
+    setMemories([]);
 
     try {
       const response = await fetch("/api/chat", {
@@ -448,7 +445,7 @@ export default function AgentInterface() {
           ))}
 
           {/* Memory Context */}
-          {(memoryEpisodic.length > 0 || memoryKnowledge.length > 0) && (
+          {memories.length > 0 && (
             <div className="flex gap-3 justify-start animate-fade-in">
               <div className="w-8 h-8 rounded-lg bg-purple-950/60 border border-purple-900/40 flex items-center justify-center shrink-0 mt-0.5">
                 <TerminalSquare
@@ -456,7 +453,7 @@ export default function AgentInterface() {
                   size={16}
                 />
               </div>
-              <MemoryContext episodic={memoryEpisodic} knowledge={memoryKnowledge} />
+              <MemoryContext memories={memories} />
             </div>
           )}
 

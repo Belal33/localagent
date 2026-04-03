@@ -15,7 +15,7 @@ export const maxDuration = 120;
 // { type: "tool_call",   tool: "...", args: {...}, id: "..." }    — agent invokes a tool
 // { type: "tool_result", tool: "...", output: "...", id: "..." }  — tool execution result
 // { type: "node_start",  node: "..." }                            — graph node transition
-// { type: "memory",      episodic: [...], knowledge: [...] }      — retrieved memory context
+// { type: "memory",      memories: [...] }                        — retrieved memory chunks
 // { type: "done" }                                                — stream complete
 
 function ndjsonLine(obj: Record<string, unknown>): Uint8Array {
@@ -153,12 +153,11 @@ export async function POST(req: NextRequest) {
                             try {
                                 const memState = await graph.getState(config);
                                 const mem = (memState.values as any)?.retrievedMemory;
-                                if (mem && (mem.episodic?.length > 0 || mem.knowledge?.length > 0)) {
+                                if (Array.isArray(mem) && mem.length > 0) {
                                     controller.enqueue(
                                         ndjsonLine({
                                             type: "memory",
-                                            episodic: mem.episodic || [],
-                                            knowledge: mem.knowledge || [],
+                                            memories: mem,
                                         })
                                     );
                                 }
