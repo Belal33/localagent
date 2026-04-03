@@ -26,7 +26,7 @@ function ndjsonLine(obj: Record<string, unknown>): Uint8Array {
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { messages, threadId } = body;
+        const { messages, threadId, chatModel, plannerModel } = body;
 
         // Convert incoming messages to LangChain format
         const langchainMessages = messages
@@ -47,9 +47,13 @@ export async function POST(req: NextRequest) {
                     : new AIMessage(text);
             });
 
-        // Configure thread ID for memory persistence
+        // Configure thread ID for memory persistence + per-request model overrides
         const config = {
-            configurable: { thread_id: threadId || "default_thread" },
+            configurable: {
+                thread_id: threadId || "default_thread",
+                ...(chatModel && { chatModel }),
+                ...(plannerModel && { plannerModel }),
+            },
         };
 
         // Get the compiled graph (lazy singleton — initializes PostgresSaver on first call)

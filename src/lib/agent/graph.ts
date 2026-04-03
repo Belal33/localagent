@@ -6,6 +6,8 @@ import {
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
 import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+import { RunnableConfig } from "@langchain/core/runnables";
+
 import {
   getToolsForState,
   getAllPossibleTools,
@@ -25,10 +27,14 @@ const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
 
 // ─── LLM via OpenCode Zen (OpenAI-compatible) — lazily initialized ──────────
 let _llm: ChatOpenAI | null = null;
-function getLLM(): ChatOpenAI {
-  if (!_llm) {
+let _llmModel = "minimax-m2.7";
+
+export function getLLM(model?: string): ChatOpenAI {
+  const targetModel = model || _llmModel;
+  if (!_llm || targetModel !== _llmModel) {
+    _llmModel = targetModel;
     _llm = new ChatOpenAI({
-      model: "minimax-m2.7",
+      model: targetModel,
       maxTokens: 64000,
       temperature: 0.1,
       configuration: {
@@ -69,11 +75,11 @@ const GraphAnnotation = Annotation.Root({
 });
 
 // ─── Agent Node (dynamic tool binding based on active skills) ───────────────
-async function callModel(state: typeof GraphAnnotation.State) {
+async function callModel(state: typeof GraphAnnotation.State, config: RunnableConfig) {
   const { messages, activeSkills } = state;
-  // Dynamically compute the tools the agent should see
+  const chatModel = (config?.configurable as Record<string, string> | undefined)?.chatModel;
   const currentTools = getToolsForState(activeSkills);
-  const llmWithTools = getLLM().bindTools(currentTools);
+  const llmWithTools = getLLM(chatModel).bindTools(currentTools);
   const response = await llmWithTools.invoke([SYSTEM_PROMPT, ...messages]);
   return { messages: [response] };
 }

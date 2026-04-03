@@ -13,7 +13,8 @@
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import type { AgentState } from "../state";
-import { getPlannerLLM } from "./shared";
+import { getPlannerLLMFromConfig } from "./shared";
+import { RunnableConfig } from "@langchain/core/runnables";
 
 const MAX_RETRIES = 2;
 
@@ -57,9 +58,10 @@ const REPLAN_SYSTEM = new SystemMessage(
 );
 
 export async function replanNode(
-    state: AgentState
+    state: AgentState,
+    config: RunnableConfig
 ): Promise<Partial<AgentState>> {
-    const structuredLLM = getPlannerLLM().withStructuredOutput(replanSchema);
+    const structuredLLM = getPlannerLLMFromConfig(config).withStructuredOutput(replanSchema);
 
     // Build context for the replanner
     const userMessages = state.messages.filter(

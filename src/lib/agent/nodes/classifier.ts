@@ -7,7 +7,8 @@
 
 import { SystemMessage } from "@langchain/core/messages";
 import type { AgentState } from "../state";
-import { getPlannerLLM } from "./shared";
+import { getPlannerLLMFromConfig } from "./shared";
+import { RunnableConfig } from "@langchain/core/runnables";
 
 const CLASSIFIER_SYSTEM = new SystemMessage(
     "You are a request classifier. Given a user message, determine if it requires " +
@@ -20,7 +21,8 @@ const CLASSIFIER_SYSTEM = new SystemMessage(
 );
 
 export async function classifierNode(
-    state: AgentState
+    state: AgentState,
+    config: RunnableConfig
 ): Promise<Partial<AgentState> & { classification?: string }> {
     const userMessages = state.messages.filter(
         (m) => m.type === "human"
@@ -37,7 +39,7 @@ export async function classifierNode(
         return { classification: "simple" };
     }
 
-    const response = await getPlannerLLM().invoke([CLASSIFIER_SYSTEM, lastUserMsg]);
+    const response = await getPlannerLLMFromConfig(config).invoke([CLASSIFIER_SYSTEM, lastUserMsg]);
 
     let text = (typeof response.content === "string"
         ? response.content

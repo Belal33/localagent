@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Send, TerminalSquare, User, Cpu } from "lucide-react";
+import { Send, TerminalSquare, User, Cpu, Settings } from "lucide-react";
 import MarkdownRenderer from "./components/MarkdownRenderer";
 import ApprovalCard from "./components/ApprovalCard";
 import PlanDisplay from "./components/PlanDisplay";
 import ActivityLog, { type ActivityItem } from "./components/ActivityLog";
 import MemoryContext, { type EpisodicMemory, type KnowledgeFact } from "./components/MemoryContext";
+import SettingsPanel, { type ModelSettings, DEFAULT_SETTINGS, GO_MODELS } from "./components/SettingsPanel";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -109,6 +110,10 @@ export default function AgentInterface() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Settings
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modelSettings, setModelSettings] = useState<ModelSettings>(DEFAULT_SETTINGS);
 
   // Auto-scroll
   useEffect(() => {
@@ -282,6 +287,8 @@ export default function AgentInterface() {
             content: m.content,
           })),
           threadId,
+          chatModel: modelSettings.chatModel,
+          plannerModel: modelSettings.plannerModel,
         }),
       });
 
@@ -357,10 +364,20 @@ export default function AgentInterface() {
               Engine: LangGraph + Cognitive Orchestration
             </p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-neutral-600">
-            <Cpu size={14} />
-            <span>Local Inference</span>
-          </div>
+          <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-xs text-neutral-600">
+                <Cpu size={14} />
+                <span>{GO_MODELS.find(m => m.id === modelSettings.chatModel)?.label ?? modelSettings.chatModel}</span>
+              </div>
+              <button
+                id="settings-btn"
+                onClick={() => setSettingsOpen(true)}
+                className="w-8 h-8 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700/50 flex items-center justify-center transition-colors"
+                title="Settings"
+              >
+                <Settings size={15} className="text-neutral-400" />
+              </button>
+            </div>
         </div>
       </header>
 
@@ -543,6 +560,14 @@ export default function AgentInterface() {
           </button>
         </form>
       </footer>
+
+      {/* Settings Panel */}
+      <SettingsPanel
+        isOpen={settingsOpen}
+        settings={modelSettings}
+        onClose={() => setSettingsOpen(false)}
+        onSave={(s) => setModelSettings(s)}
+      />
     </div>
   );
 }

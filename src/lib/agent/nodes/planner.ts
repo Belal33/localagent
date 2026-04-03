@@ -8,7 +8,8 @@
 import { SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import type { AgentState } from "../state";
-import { getPlannerLLM } from "./shared";
+import { getPlannerLLMFromConfig } from "./shared";
+import { RunnableConfig } from "@langchain/core/runnables";
 import { getAllPossibleTools } from "../skills";
 
 const planSchema = z.object({
@@ -18,9 +19,10 @@ const planSchema = z.object({
 });
 
 export async function plannerNode(
-    state: AgentState
+    state: AgentState,
+    config: RunnableConfig
 ): Promise<Partial<AgentState>> {
-    const structuredLLM = getPlannerLLM().withStructuredOutput(planSchema);
+    const structuredLLM = getPlannerLLMFromConfig(config).withStructuredOutput(planSchema);
 
     const tools = getAllPossibleTools();
     const toolDescriptions = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
