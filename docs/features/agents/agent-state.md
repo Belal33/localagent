@@ -5,7 +5,8 @@ Includes messages, planning state, active skills, step retries, memory context, 
 
 Defined in `src/lib/agent/state.ts`. Extends `MessagesAnnotation` with: `plan` (remaining
 steps), `pastSteps` (completed tuples), `currentStep`, `response`, `activeSkills` (deduped),
-`stepStatus` (`"success"` / `"failed"`), `stepRetries` (max 2), `memoryContextText`,
-`retrievedMemory` (Cognee chunks), and `retrievedEpisodes` (past-conversation summaries).
+`stepStatus` (`"success"` / `"failed"`), `stepRetries` (max 2), `stepStartIndex`
+(message index where the current step began — used by replan to extract only that step's
+trajectory), `memoryContextText`, `retrievedMemory` (Cognee chunks), and `retrievedEpisodes`.
 Each field uses a custom reducer so partial node updates merge correctly. Exported as
 `AgentAnnotation` alongside the `AgentState` TypeScript type.

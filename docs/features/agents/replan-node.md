@@ -1,11 +1,16 @@
 # Replan Node
 
-Evaluates each completed step's output and decides `continue` / `retry` / `done`, updating the plan accordingly.
-Implements a max-2-retry policy per step and anti-loop protection against identical plan regurgitation.
+Evaluates each completed step using its full trajectory, then decides `continue` / `retry` / `done`.
+The plan is IMMUTABLE: replan can only advance `plan[0]`, retry, or finish — it cannot rewrite steps.
 
-Implemented in `src/lib/agent/nodes/replan.ts`. Uses a zod structured-output schema with
-a `type: "continue" | "retry" | "done"` discriminator. On `"retry"` it increments
-`stepRetries` (giving up at `MAX_RETRIES = 2`). On `"continue"` it advances `plan`,
-appends to `pastSteps`, and resets retries — if the LLM returns an unchanged plan the
-node forces advancement to avoid infinite loops. On `"done"` it sets `response`, which
-ends the graph via the `afterReplan` conditional edge.
+Implemented in `src/lib/agent/nodes/replan.ts`. Extracts the current step's trajectory
+by slicing `messages` from `state.stepStartIndex` onward, rendering agent messages,
+tool calls, and tool results as a compact transcript for the evaluator LLM. Uses a zod
+structured-output schema with `type: "continue" | "retry" | "done"` (no `steps` field —
+regeneration is intentionally removed). On `"retry"` it increments `stepRetries`
+(giving up at `MAX_RETRIES = 2` with an explicit failure response). On `"continue"` it
+pops `plan[0]` and appends a trajectory summary to `pastSteps`; if no steps remain it
+synthesizes `"done"`. On `"done"` it verifies no steps remain — if the LLM claims done
+while remaining steps exist, the result is coerced back to `"continue"` to prevent
+premature termination. Uses the planner LLM (`minimax-m2.5` by default) via
+`getPlannerLLMFromConfig`.

@@ -1,11 +1,12 @@
 /**
  * ─── Executor Node ──────────────────────────────────────────────────────────
  *
- * Picks the next step from the plan and injects it as a HumanMessage
- * for the agent to execute.
+ * Picks the next step from the plan and records the message index where
+ * execution starts. The actual step instruction is surfaced to the agent
+ * via the dynamic system prompt in callModel (graph.ts) — not as a
+ * HumanMessage, which confuses the LLM into thinking the user is speaking.
  */
 
-import { HumanMessage } from "@langchain/core/messages";
 import type { AgentState } from "../state";
 
 export async function executorNode(
@@ -15,12 +16,7 @@ export async function executorNode(
 
     return {
         currentStep,
-        messages: [
-            new HumanMessage(
-                `Execute this step: ${currentStep}\n\n` +
-                `Context: You are working through a multi-step plan. ` +
-                `Focus only on this specific step. When done, report what you accomplished.`
-            ),
-        ],
+        // Mark where this step begins so replan can extract only its trajectory.
+        stepStartIndex: state.messages.length,
     };
 }

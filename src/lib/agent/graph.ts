@@ -76,15 +76,46 @@ const GraphAnnotation = Annotation.Root({
 
 // ─── Agent Node (dynamic tool binding based on active skills) ───────────────
 async function callModel(state: typeof GraphAnnotation.State, config: RunnableConfig) {
-  const { messages, activeSkills, memoryContextText } = state;
+  const { messages, activeSkills, memoryContextText, plan, currentStep, pastSteps } = state;
   const chatModel = (config?.configurable as Record<string, string> | undefined)?.chatModel;
   const currentTools = getToolsForState(activeSkills);
   const llmWithTools = getLLM(chatModel).bindTools(currentTools);
 
-  // Build system prompt — merge memory context into it so it comes BEFORE user messages
-  const systemContent = memoryContextText
-    ? `${SYSTEM_PROMPT.content}\n\n${memoryContextText}`
-    : String(SYSTEM_PROMPT.content);
+  // Build system prompt — merge memory context + (if planning) step focus.
+  const parts: string[] = [String(SYSTEM_PROMPT.content)];
+
+  if (memoryContextText) {
+    parts.push(memoryContextText);
+  }
+
+  // ─── Step-focus block: only present when executing a plan ─────────────────
+  // This keeps the model committed to the current step even in long histories.
+  if (currentStep && plan.length > 0) {
+    const remainingSteps = plan.slice(1);
+    const completedText =
+      pastSteps.length > 0
+        ? pastSteps.map(([s], i) => `  ${i + 1}. [done] ${s}`).join("\n")
+        : "  (none yet)";
+    const remainingText =
+      remainingSteps.length > 0
+        ? remainingSteps.map((s, i) => `  ${pastSteps.length + 2 + i}. ${s}`).join("\n")
+        : "  (none)";
+
+    parts.push(
+      `[CURRENT PLAN EXECUTION]\n` +
+      `You are executing a multi-step plan. Focus on ONLY the current step.\n\n` +
+      `Completed steps:\n${completedText}\n\n` +
+      `➡ CURRENT STEP (step ${pastSteps.length + 1}): ${currentStep}\n\n` +
+      `Upcoming steps (DO NOT address yet):\n${remainingText}\n\n` +
+      `Rules:\n` +
+      `- Use tools to actually perform the current step. Do not describe, plan, or summarize in prose when a tool is appropriate.\n` +
+      `- Do NOT attempt upcoming steps in the same turn.\n` +
+      `- After the step's tools succeed, reply with a short one-line confirmation of what you did — nothing more.\n` +
+      `- If the step is not achievable with the available tools, say so briefly and stop.`
+    );
+  }
+
+  const systemContent = parts.join("\n\n");
   const systemMsg = new SystemMessage(systemContent);
 
   // Filter out any injected system messages from the memory retrieval node
@@ -93,7 +124,7 @@ async function callModel(state: typeof GraphAnnotation.State, config: RunnableCo
     (m) => !(m._getType() === "system" && typeof m.content === "string" && m.content.includes("[MEMORY CONTEXT"))
   );
 
-  console.log(`[Agent] Invoking model with ${currentTools.length} tools, ${conversationMessages.length} msgs, systemPrompt=${systemContent.length} chars`);
+  console.log(`[Agent] Invoking model with ${currentTools.length} tools, ${conversationMessages.length} msgs, systemPrompt=${systemContent.length} chars${currentStep ? `, step="${currentStep.slice(0, 60)}"` : ''}`);
 
   // Try with tools first; fall back to no-tools if model returns empty
   // (minimax-m2.7 via OpenCode doesn't support OpenAI function calling)
