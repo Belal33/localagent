@@ -21,5 +21,8 @@ CREATE INDEX IF NOT EXISTS idx_episodic_embedding
     ON episodic_memories USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_episodic_thread
+    ON episodic_memories (thread_id);
+
 CREATE INDEX IF NOT EXISTS idx_episodic_user
     ON episodic_memories (user_id);

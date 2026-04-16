@@ -55,6 +55,16 @@ export const AgentAnnotation = Annotation.Root({
         default: () => 0,
     }),
 
+    /**
+     * Index into `messages` where the current step started.
+     * Set by the executor; consumed by replan to extract only this step's
+     * trajectory (tool calls + tool results + agent text) for evaluation.
+     */
+    stepStartIndex: Annotation<number>({
+        reducer: (_, next) => next,
+        default: () => 0,
+    }),
+
     // ─── Phase 4: Memory Context ─────────────────────────────────────
     /**
      * The exact text injected into the agent's message stream.

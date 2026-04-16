@@ -1,21 +1,20 @@
 /**
  * src/lib/memory/distiller.ts
  *
- * Memory Distiller: runs asynchronously after a conversation ends.
+ * Memory Distiller: runs asynchronously after each agent turn.
  *
- * Produces TWO types of memory for Cognee:
- *   1. FACTS — standalone knowledge statements (long-term semantic memory)
- *      → stored in `memory_{userId}` dataset
- *   2. EPISODE — a timestamped conversation summary (episodic memory)
- *      → stored in `episodes_{userId}` dataset
+ * Produces TWO types of memory:
+ *   1. FACTS — standalone knowledge statements → Cognee (vector search)
+ *   2. EPISODE — a conversation summary → Postgres+pgvector (upsert per thread)
  *
- * The retrieval node uses both to give the agent:
- *   - Knowledge about the user (facts)
- *   - Context about what happened in past conversations (episodes)
+ * The distiller receives the FULL thread history (not just the last turn),
+ * so facts and episode summaries reflect the complete conversation context.
+ * Episodes are upserted: if one already exists for this thread, it's updated.
  */
 import { type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { upsertEpisode } from "./episodes";
 
 const COGNEE_BASE_URL = process.env.COGNEE_URL || "http://cognee:8000";
 const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
@@ -27,12 +26,11 @@ interface DistillerOutput {
 }
 
 /**
- * Get a lightweight LLM instance for extraction.
- * Uses a fast model since this runs in the background.
+ * Get a lightweight LLM for extraction (runs in background, speed matters).
  */
 function getDistillerLLM(): ChatOpenAI {
     return new ChatOpenAI({
-        model: "gemini-2.5-flash",
+        model: "minimax-m2.5",
         maxTokens: 2000,
         temperature: 0,
         configuration: {
@@ -45,7 +43,7 @@ function getDistillerLLM(): ChatOpenAI {
 // ─── Prompts ────────────────────────────────────────────────────────────────
 
 const FACT_EXTRACTION_PROMPT = new SystemMessage(
-`You are a memory extraction system. Given a conversation between a User and an Assistant, extract ALL meaningful facts, preferences, and knowledge worth remembering for future interactions.
+    `You are a memory extraction system. Given a conversation between a User and an Assistant, extract ALL meaningful facts, preferences, and knowledge worth remembering for future interactions.
 
 Rules:
 - Extract facts about the user (name, preferences, technical stack, habits, goals)
@@ -59,20 +57,20 @@ Rules:
 );
 
 const EPISODE_SUMMARY_PROMPT = new SystemMessage(
-`You are a conversation summarizer. Given a conversation between a User and an Assistant, write a single concise summary sentence (max 100 words) describing what happened in this interaction.
+    `You are a conversation summarizer. Given a conversation between a User and an Assistant, write a concise summary (1-3 sentences, max 150 words) describing EVERYTHING that happened in this interaction.
 
 Focus on:
-- What the user wanted or asked about
-- What was accomplished or discussed
-- Any key decisions or outcomes
+- What the user wanted or asked about  
+- What was accomplished, discussed, or decided
+- Key outcomes, errors encountered, or solutions found
 
-Write in past tense. Start with "The user..." or "We discussed..."
-If the conversation was trivial (just greetings), respond with exactly: TRIVIAL`
+Write in past tense. Be specific — include names of technologies, tools, and concepts discussed.
+If the conversation was trivial (just greetings with no substance), respond with exactly: TRIVIAL`
 );
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Extract LLM text content from response */
+/** Extract LLM response text */
 function extractContent(response: { content: string | Array<{ type: string; text?: string }> }): string {
     if (typeof response.content === "string") return response.content;
     return (response.content as Array<{ type: string; text?: string }>)
@@ -81,59 +79,9 @@ function extractContent(response: { content: string | Array<{ type: string; text
         .join("");
 }
 
-/** Send a document to Cognee and cognify it */
-async function storeInCognee(text: string, filename: string, datasetName: string): Promise<boolean> {
-    try {
-        const formData = new FormData();
-        formData.append(
-            "data",
-            new Blob([text], { type: "text/plain" }),
-            filename,
-        );
-        formData.append("datasetName", datasetName);
-
-        const addRes = await fetch(`${COGNEE_BASE_URL}/api/v1/add`, {
-            method: "POST",
-            body: formData,
-        });
-
-        if (!addRes.ok) {
-            console.warn(`[Memory Distiller] Failed to add to ${datasetName}: ${await addRes.text()}`);
-            return false;
-        }
-
-        const cognifyRes = await fetch(`${COGNEE_BASE_URL}/api/v1/cognify`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ datasets: [datasetName] }),
-        });
-
-        if (!cognifyRes.ok) {
-            console.warn(`[Memory Distiller] Failed to cognify ${datasetName}: ${await cognifyRes.text()}`);
-            return false;
-        }
-
-        return true;
-    } catch (err) {
-        console.warn(`[Memory Distiller] Cognee store error for ${datasetName}:`, (err as Error).message);
-        return false;
-    }
-}
-
-// ─── Main Distiller ─────────────────────────────────────────────────────────
-
-/**
- * Distill a conversation into both factual knowledge AND an episodic summary.
- *
- * Flow:
- *   Conversation → LLM → Facts + Episode Summary → Cognee (two datasets)
- */
-export async function distillConversation(
-    userId: string,
-    threadId: string,
-    messages: BaseMessage[],
-): Promise<DistillerOutput> {
-    const conversationText = messages
+/** Build readable transcript from messages */
+function buildTranscript(messages: BaseMessage[]): string {
+    return messages
         .filter((m) => {
             const t = m._getType();
             return t === "human" || t === "ai";
@@ -150,14 +98,74 @@ export async function distillConversation(
             return `${role}: ${content}`;
         })
         .join("\n");
+}
+
+/** Store facts in Cognee */
+async function storeFacts(facts: string[], threadId: string, userId: string): Promise<boolean> {
+    try {
+        const factsDocument = facts.join("\n");
+        const formData = new FormData();
+        formData.append(
+            "data",
+            new Blob([factsDocument], { type: "text/plain" }),
+            `${threadId}_facts.txt`,
+        );
+        formData.append("datasetName", `memory_${userId}`);
+
+        const addRes = await fetch(`${COGNEE_BASE_URL}/api/v1/add`, {
+            method: "POST",
+            body: formData,
+        });
+
+        if (!addRes.ok) {
+            console.warn(`[Distiller] Failed to add facts: ${await addRes.text()}`);
+            return false;
+        }
+
+        const cognifyRes = await fetch(`${COGNEE_BASE_URL}/api/v1/cognify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ datasets: [`memory_${userId}`] }),
+        });
+
+        if (!cognifyRes.ok) {
+            console.warn(`[Distiller] Failed to cognify: ${await cognifyRes.text()}`);
+            return false;
+        }
+
+        return true;
+    } catch (err) {
+        console.warn(`[Distiller] Cognee store error:`, (err as Error).message);
+        return false;
+    }
+}
+
+// ─── Main Distiller ─────────────────────────────────────────────────────────
+
+/**
+ * Distill a conversation into facts (Cognee) + episode (Postgres).
+ *
+ * @param userId - User ID for scoping memory
+ * @param threadId - Thread ID (one episode per thread, upserted)
+ * @param messages - FULL thread history (all messages in this conversation)
+ */
+export async function distillConversation(
+    userId: string,
+    threadId: string,
+    messages: BaseMessage[],
+): Promise<DistillerOutput> {
+    const conversationText = buildTranscript(messages);
 
     if (!conversationText.trim()) {
         return { summary: "", factsExtracted: 0, episodeStored: false };
     }
 
+    // Count turns for metadata
+    const turnCount = messages.filter((m) => m._getType() === "human").length;
+
     try {
         const llm = getDistillerLLM();
-        console.log(`[Memory Distiller] Processing thread=${threadId}...`);
+        console.log(`[Distiller] Processing thread=${threadId} (${turnCount} turns, ${messages.length} messages)...`);
 
         // ─── Step 1: Extract facts + episode summary in parallel ────────
         const [factsResponse, episodeResponse] = await Promise.all([
@@ -177,47 +185,46 @@ export async function distillConversation(
             ? []
             : factsContent.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
 
-        // Parse episode summary
+        // Parse episode
         const episodeContent = extractContent(episodeResponse).trim();
         const hasEpisode = episodeContent !== "TRIVIAL" && episodeContent.length > 10;
 
-        console.log(`[Memory Distiller] Extracted ${facts.length} facts, episode: ${hasEpisode ? "yes" : "no"}`);
+        console.log(`[Distiller] Extracted ${facts.length} facts, episode: ${hasEpisode ? "yes" : "no"}`);
 
-        // ─── Step 2: Store in Cognee (parallel) ─────────────────────────
-        const storePromises: Promise<boolean>[] = [];
+        // ─── Step 2: Store both in parallel ─────────────────────────────
+        const storePromises: Promise<unknown>[] = [];
 
-        // Store facts in the knowledge dataset
         if (facts.length > 0) {
-            const factsDocument = facts.join("\n");
-            console.log(`[Memory Distiller] Facts:`, facts);
-            storePromises.push(
-                storeInCognee(factsDocument, `${threadId}_facts.txt`, `memory_${userId}`)
-            );
+            console.log(`[Distiller] Facts:`, facts);
+            storePromises.push(storeFacts(facts, threadId, userId));
         }
 
-        // Store episode in the episodes dataset with ISO timestamp
+        let episodeStored = false;
         if (hasEpisode) {
-            const timestamp = new Date().toISOString();
-            const episodeDocument = `[${timestamp}] ${episodeContent}`;
-            console.log(`[Memory Distiller] Episode: ${episodeDocument}`);
+            console.log(`[Distiller] Episode: ${episodeContent}`);
             storePromises.push(
-                storeInCognee(episodeDocument, `${threadId}_episode.txt`, `episodes_${userId}`)
+                upsertEpisode({
+                    threadId,
+                    userId,
+                    summary: episodeContent,
+                    metadata: { turnCount, messageCount: messages.length },
+                }).then(() => { episodeStored = true; })
+                    .catch((err) => {
+                        console.warn(`[Distiller] Episode upsert failed:`, (err as Error).message);
+                    })
             );
         }
 
-        const results = await Promise.all(storePromises);
-        const episodeStored = hasEpisode && results.length > (facts.length > 0 ? 1 : 0)
-            ? results[results.length - 1]
-            : false;
+        await Promise.all(storePromises);
 
-        console.log(`[Memory Distiller] Done: ${facts.length} facts, episode=${episodeStored}`);
+        console.log(`[Distiller] Done: ${facts.length} facts, episode=${episodeStored}`);
         return {
             summary: `Stored ${facts.length} facts${episodeStored ? " + episode" : ""}`,
             factsExtracted: facts.length,
             episodeStored,
         };
     } catch (err) {
-        console.error("[Memory Distiller] Error:", (err as Error).message);
-        return { summary: "Cognee Error", factsExtracted: 0, episodeStored: false };
+        console.error("[Distiller] Error:", (err as Error).message);
+        return { summary: "Distiller Error", factsExtracted: 0, episodeStored: false };
     }
 }

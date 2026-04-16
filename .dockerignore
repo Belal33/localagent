@@ -9,5 +9,5 @@ playwright-video
 next-env.d.ts
 .env*
 .DS_Store
-implementation_plan
+docs
 README.md

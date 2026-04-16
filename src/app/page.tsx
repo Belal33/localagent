@@ -112,9 +112,46 @@ export default function AgentInterface() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Settings
+  // Settings (persisted to localStorage)
+  const SETTINGS_STORAGE_KEY = "localagent.modelSettings.v1";
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(DEFAULT_SETTINGS);
+
+  // Hydrate from localStorage on mount (client-only to avoid SSR mismatch)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<ModelSettings>;
+      const validIds = new Set(GO_MODELS.map((m) => m.id));
+      setModelSettings({
+        chatModel:
+          parsed.chatModel && validIds.has(parsed.chatModel)
+            ? parsed.chatModel
+            : DEFAULT_SETTINGS.chatModel,
+        plannerModel:
+          parsed.plannerModel && validIds.has(parsed.plannerModel)
+            ? parsed.plannerModel
+            : DEFAULT_SETTINGS.plannerModel,
+      });
+    } catch {
+      // ignore corrupted value
+    }
+  }, []);
+
+  // Persist on change
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        SETTINGS_STORAGE_KEY,
+        JSON.stringify(modelSettings),
+      );
+    } catch {
+      // storage quota / disabled — non-fatal
+    }
+  }, [modelSettings]);
 
   // Auto-scroll
   useEffect(() => {

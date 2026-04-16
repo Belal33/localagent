@@ -76,11 +76,38 @@ const GraphAnnotation = Annotation.Root({
 
 // ─── Agent Node (dynamic tool binding based on active skills) ───────────────
 async function callModel(state: typeof GraphAnnotation.State, config: RunnableConfig) {
-  const { messages, activeSkills } = state;
+  const { messages, activeSkills, memoryContextText } = state;
   const chatModel = (config?.configurable as Record<string, string> | undefined)?.chatModel;
   const currentTools = getToolsForState(activeSkills);
   const llmWithTools = getLLM(chatModel).bindTools(currentTools);
-  const response = await llmWithTools.invoke([SYSTEM_PROMPT, ...messages]);
+
+  // Build system prompt — merge memory context into it so it comes BEFORE user messages
+  const systemContent = memoryContextText
+    ? `${SYSTEM_PROMPT.content}\n\n${memoryContextText}`
+    : String(SYSTEM_PROMPT.content);
+  const systemMsg = new SystemMessage(systemContent);
+
+  // Filter out any injected system messages from the memory retrieval node
+  // (they'd appear after the user message due to reducer ordering)
+  const conversationMessages = messages.filter(
+    (m) => !(m._getType() === "system" && typeof m.content === "string" && m.content.includes("[MEMORY CONTEXT"))
+  );
+
+  console.log(`[Agent] Invoking model with ${currentTools.length} tools, ${conversationMessages.length} msgs, systemPrompt=${systemContent.length} chars`);
+
+  // Try with tools first; fall back to no-tools if model returns empty
+  // (minimax-m2.7 via OpenCode doesn't support OpenAI function calling)
+  let response = await llmWithTools.invoke([systemMsg, ...conversationMessages]);
+
+  const isEmpty = !response.content && (!response.tool_calls || response.tool_calls.length === 0);
+  if (isEmpty) {
+    console.warn(`[Agent] Model returned empty with tools bound — retrying without tools`);
+    const llmNoTools = getLLM(chatModel);
+    response = await llmNoTools.invoke([systemMsg, ...conversationMessages]);
+  }
+
+  const contentLen = typeof response.content === 'string' ? response.content.length : JSON.stringify(response.content).length;
+  console.log(`[Agent] Response: ${contentLen} chars, ${response.tool_calls?.length ?? 0} tool calls${isEmpty ? ' (fallback)' : ''}`);
   return { messages: [response] };
 }
 

@@ -75,6 +75,8 @@ export async function POST(req: NextRequest) {
                     let lastEmittedNode = "";
                     let currentStepIndex = 0;
 
+                    let agentStreamedTokens = false; // Track if streaming actually produced tokens
+
                     for await (const { event, data, metadata } of eventStream) {
                         if (isClosed) break;
 
@@ -94,14 +96,16 @@ export async function POST(req: NextRequest) {
                             }
 
                             if (textChunk.length > 0) {
+                                agentStreamedTokens = true;
                                 controller.enqueue(
                                     ndjsonLine({ type: "token", content: textChunk })
                                 );
                             }
                         }
 
-                        // ─── Tool Calls (agent requesting tool use) ─────
+                        // ─── Tool Calls + Fallback for non-streaming models ─────
                         if (event === "on_chat_model_end" && langgraph_node === "agent") {
+                            // Emit tool calls
                             const toolCalls = data.output?.tool_calls;
                             if (Array.isArray(toolCalls) && toolCalls.length > 0) {
                                 for (const tc of toolCalls) {
@@ -115,6 +119,27 @@ export async function POST(req: NextRequest) {
                                     );
                                 }
                             }
+
+                            // Fallback: if no streaming tokens were emitted but the model
+                            // returned text content in on_chat_model_end, emit it now.
+                            // This handles models that don't support token-by-token streaming.
+                            if (!agentStreamedTokens && data.output?.content) {
+                                const fullContent = typeof data.output.content === "string"
+                                    ? data.output.content
+                                    : Array.isArray(data.output.content)
+                                        ? (data.output.content as any[])
+                                            .filter((b: any) => b.type === "text" && b.text)
+                                            .map((b: any) => b.text)
+                                            .join("")
+                                        : "";
+                                if (fullContent.length > 0) {
+                                    controller.enqueue(
+                                        ndjsonLine({ type: "token", content: fullContent })
+                                    );
+                                }
+                            }
+                            // Reset for next agent call cycle (tool loops)
+                            agentStreamedTokens = false;
                         }
 
                         // ─── Tool Results ───────────────────────
@@ -149,13 +174,14 @@ export async function POST(req: NextRequest) {
                         }
 
                         // ─── Memory Context: emit retrieved memories to client ──
+                        // Read directly from node output (data.output) — NOT graph.getState()
+                        // because the checkpointer may not have flushed yet (race condition).
                         if (event === "on_chain_end" && langgraph_node === "memoryRetrieval") {
                             try {
-                                const memState = await graph.getState(config);
-                                const vals = memState.values as any;
-                                const mem = vals?.retrievedMemory;
-                                const episodes = vals?.retrievedEpisodes;
-                                const contextText = vals?.memoryContextText;
+                                const nodeOutput = data?.output as Record<string, unknown> | undefined;
+                                const mem = nodeOutput?.retrievedMemory as any[] | undefined;
+                                const episodes = nodeOutput?.retrievedEpisodes as any[] | undefined;
+                                const contextText = nodeOutput?.memoryContextText as string | undefined;
                                 const hasMemory = (Array.isArray(mem) && mem.length > 0);
                                 const hasEpisodes = (Array.isArray(episodes) && episodes.length > 0);
                                 if (hasMemory || hasEpisodes) {
@@ -169,7 +195,7 @@ export async function POST(req: NextRequest) {
                                     );
                                 }
                             } catch {
-                                // State read may fail if not yet checkpointed
+                                // Node output may be missing in edge cases
                             }
                         }
 
@@ -280,11 +306,20 @@ export async function POST(req: NextRequest) {
                     controller.enqueue(ndjsonLine({ type: "done" }));
 
                     // ─── Fire-and-forget memory distillation ──────────────────
-                    // Runs in background after stream closes; never blocks the response.
-                    const allMessages = langchainMessages;
-                    distillConversation("default", threadId || "default_thread", allMessages).catch((err) =>
-                        console.error("[Memory Distiller] Background distillation failed:", err),
-                    );
+                    // Uses full thread history from checkpointer (not just current request)
+                    // so the distiller can build a complete episode summary.
+                    const tid = threadId || "default_thread";
+                    graph.getState(config).then((threadState) => {
+                        const fullHistory = (threadState.values as any)?.messages || langchainMessages;
+                        distillConversation("default", tid, fullHistory).catch((err) =>
+                            console.error("[Memory Distiller] Background distillation failed:", err),
+                        );
+                    }).catch(() => {
+                        // Fallback: use current request messages if state read fails
+                        distillConversation("default", tid, langchainMessages).catch((err) =>
+                            console.error("[Memory Distiller] Background distillation failed:", err),
+                        );
+                    });
                 } catch (err) {
                     if (!isClosed) {
                         // Check if this is a GraphInterrupt (from interrupt())

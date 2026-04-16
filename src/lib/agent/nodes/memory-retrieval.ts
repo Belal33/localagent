@@ -3,27 +3,24 @@
  *
  * Memory Retrieval Node — runs BEFORE the classifier.
  *
- * Enriches the agent's context by querying the Cognee Memory Engine.
- * Retrieves TWO types of memory:
- *   1. KNOWLEDGE — factual memory from `memory_*` dataset (user preferences, facts)
- *   2. EPISODIC  — past conversation summaries from `episodes_*` dataset
+ * Enriches the agent's context from TWO sources:
+ *   1. KNOWLEDGE — Cognee CHUNKS search (semantic facts about the user)
+ *   2. EPISODIC  — Postgres+pgvector search (past conversation summaries)
  *
- * Both are injected into the agent's context and sent to the UI for display.
+ * Both are injected as a HumanMessage and sent to the UI for display.
  */
-import { HumanMessage } from "@langchain/core/messages";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { searchEpisodes, type EpisodeResult } from "@/lib/memory/episodes";
 
 const COGNEE_BASE_URL = process.env.COGNEE_URL || "http://cognee:8000";
 
 const MIN_CHUNK_LENGTH = 10;
 const USER_ECHO_PATTERN = /^(User|Assistant|Human|AI):\s/i;
 
-/** Pattern to detect episodic entries: [ISO timestamp] summary */
-const EPISODE_PATTERN = /^\[(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)\]\s*(.+)$/;
-
 export interface MemoryChunk {
     text: string;
     score: number | null;
-    source: "chunk" | "summary" | "episode";
+    source: "chunk" | "summary";
 }
 
 export interface EpisodicMemory {
@@ -31,7 +28,7 @@ export interface EpisodicMemory {
     summary: string;
 }
 
-/** Run a single Cognee search and return raw results */
+/** Run a single Cognee search */
 async function cogneeSearch(query: string, searchType: string, topK: number): Promise<unknown[]> {
     try {
         const res = await fetch(`${COGNEE_BASE_URL}/api/v1/search`, {
@@ -56,28 +53,13 @@ async function cogneeSearch(query: string, searchType: string, topK: number): Pr
     }
 }
 
-/** Extract text from a Cognee result item */
+/** Extract text from a Cognee result */
 function extractText(item: unknown): string {
     if (typeof item === "string") return item.trim();
     if (item && typeof item === "object") {
         return String((item as Record<string, unknown>).text || "").trim();
     }
     return "";
-}
-
-/** Format ISO date to human-readable */
-function formatDate(iso: string): string {
-    try {
-        const d = new Date(iso);
-        return d.toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-        });
-    } catch {
-        return iso;
-    }
 }
 
 export async function memoryRetrievalNode(state: { messages: unknown[] }) {
@@ -100,69 +82,70 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
 
         if (!userQuery.trim()) return {};
 
-        // ─── Dual Search: CHUNKS (facts + episodes mixed) + SUMMARIES ────
-        // Cognee returns results from ALL datasets in one search, so a single
-        // CHUNKS call with higher top_k covers both facts and episode chunks.
-        const [chunkResults, summaryResults] = await Promise.all([
-            cogneeSearch(userQuery, "CHUNKS", 15),
-            cogneeSearch(userQuery, "SUMMARIES", 5),
+        // ─── Parallel: Cognee facts + Postgres episodes ─────────────────
+        const [chunkResults, summaryResults, episodeResults] = await Promise.all([
+            cogneeSearch(userQuery, "CHUNKS", 5),
+            cogneeSearch(userQuery, "SUMMARIES", 3),
+            searchEpisodes(userQuery, "default", undefined, 3).catch((err) => {
+                console.warn("[Memory Retrieval] Episode search failed:", (err as Error).message);
+                return [] as EpisodeResult[];
+            }),
         ]);
 
-        console.log(`[Memory Retrieval] Got ${chunkResults.length} chunks, ${summaryResults.length} summaries`);
+        console.log(`[Memory Retrieval] Got ${chunkResults.length} chunks, ${summaryResults.length} summaries, ${episodeResults.length} episodes`);
 
-        // ─── Process results ──────────────────────────────────────────────
+        // ─── Process Cognee results (facts) ─────────────────────────────
         const seen = new Set<string>();
         const knowledgeItems: MemoryChunk[] = [];
-        const episodicItems: EpisodicMemory[] = [];
 
-        // Helper: process a set of items, auto-detecting episodes by timestamp pattern
-        function processItems(items: unknown[], defaultSource: "chunk" | "summary") {
-            for (const item of items) {
-                const text = extractText(item);
-                const normalized = text.toLowerCase();
+        for (const item of [...chunkResults, ...summaryResults]) {
+            const text = extractText(item);
+            const normalized = text.toLowerCase();
 
-                if (text.length < MIN_CHUNK_LENGTH) continue;
-                if (seen.has(normalized)) continue;
-                if (USER_ECHO_PATTERN.test(text)) continue;
+            if (text.length < MIN_CHUNK_LENGTH) continue;
+            if (seen.has(normalized)) continue;
+            if (USER_ECHO_PATTERN.test(text)) continue;
 
-                seen.add(normalized);
+            // Skip episodic entries that may linger in Cognee from old data
+            if (/^\[\d{4}-\d{2}-\d{2}T/.test(text)) continue;
 
-                // Check if this is an episodic entry: [timestamp] summary
-                const episodeMatch = text.match(EPISODE_PATTERN);
-                if (episodeMatch) {
-                    episodicItems.push({
-                        date: formatDate(episodeMatch[1]),
-                        summary: episodeMatch[2].trim(),
-                    });
-                } else {
-                    knowledgeItems.push({
-                        text,
-                        score: typeof (item as any)?.feedback_weight === "number"
-                            ? (item as any).feedback_weight : null,
-                        source: defaultSource,
-                    });
-                }
-            }
+            seen.add(normalized);
+            knowledgeItems.push({
+                text,
+                score: typeof (item as any)?.feedback_weight === "number"
+                    ? (item as any).feedback_weight : null,
+                source: chunkResults.includes(item) ? "chunk" : "summary",
+            });
         }
 
-        processItems(chunkResults, "chunk");
-        processItems(summaryResults, "summary");
+        // ─── Process Postgres episodes ──────────────────────────────────
+        const episodicItems: EpisodicMemory[] = episodeResults
+            .filter((e) => e.similarity > 0.4) // Only reasonably relevant episodes
+            .slice(0, 3) // Limit to avoid overwhelming the model
+            .map((e) => ({
+                date: e.date,
+                summary: e.summary,
+            }));
 
-        // ─── Build injected context ─────────────────────────────────────────
-        if (knowledgeItems.length === 0 && episodicItems.length === 0) return {};
+        // ─── Build injected context ─────────────────────────────────────
+        // Cap items to keep context compact for the LLM
+        const cappedKnowledge = knowledgeItems.slice(0, 5);
+        const cappedEpisodes = episodicItems.slice(0, 3);
+
+        if (cappedKnowledge.length === 0 && cappedEpisodes.length === 0) return {};
 
         const contextParts: string[] = ["[MEMORY CONTEXT — relevant information from past interactions]"];
 
-        if (knowledgeItems.length > 0) {
+        if (cappedKnowledge.length > 0) {
             contextParts.push("## Known facts about the user:");
-            for (const k of knowledgeItems) {
+            for (const k of cappedKnowledge) {
                 contextParts.push(`- ${k.text}`);
             }
         }
 
-        if (episodicItems.length > 0) {
+        if (cappedEpisodes.length > 0) {
             contextParts.push("## Recent past conversations:");
-            for (const e of episodicItems) {
+            for (const e of cappedEpisodes) {
                 contextParts.push(`- [${e.date}] ${e.summary}`);
             }
         }
@@ -170,15 +153,15 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
         contextParts.push("[END MEMORY CONTEXT]");
         const contextText = contextParts.join("\n");
 
-        const memoryContextMsg = new HumanMessage({ content: contextText });
+        const memoryContextMsg = new SystemMessage({ content: contextText });
 
-        console.log(`[Memory Retrieval] Injecting ${knowledgeItems.length} facts + ${episodicItems.length} episodes`);
+        console.log(`[Memory Retrieval] Injecting ${cappedKnowledge.length} facts + ${cappedEpisodes.length} episodes`);
 
         return {
             messages: [memoryContextMsg],
             memoryContextText: contextText,
-            retrievedMemory: knowledgeItems,
-            retrievedEpisodes: episodicItems,
+            retrievedMemory: cappedKnowledge,
+            retrievedEpisodes: cappedEpisodes,
         };
     } catch (err) {
         console.warn("[Memory Retrieval] Unexpected error (skipping):", (err as Error).message);
