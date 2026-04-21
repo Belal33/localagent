@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { X, Settings, Cpu, Brain, ChevronDown } from "lucide-react";
+import { X, Settings, Cpu, Brain, ChevronDown, Globe, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
 
 export interface ModelSettings {
   chatModel: string;
@@ -18,7 +18,7 @@ export const GO_MODELS = [
 ];
 
 export const DEFAULT_SETTINGS: ModelSettings = {
-  chatModel: "minimax-m2.7",
+  chatModel: "mimo-v2-pro",
   plannerModel: "minimax-m2.5",
 };
 
@@ -75,6 +75,128 @@ function ModelSelect({
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Firefox Profile Section ────────────────────────────────────────────────
+function FirefoxProfileSection() {
+  const [status, setStatus] = useState<{
+    imported: boolean;
+    lastImport: string | null;
+    hostProfilePath: string;
+    userDataDir: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<
+    | { ok: true; copied: number; skipped: string[]; bytes: number; checkpointed: string[]; firefoxWarning: string | null }
+    | { ok: false; error: string }
+    | null
+  >(null);
+
+  const refreshStatus = async () => {
+    try {
+      const res = await fetch("/api/camofox/import-profile");
+      if (res.ok) setStatus(await res.json());
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => {
+    refreshStatus();
+  }, []);
+
+  const handleImport = async () => {
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/camofox/import-profile", { method: "POST" });
+      const data = await res.json();
+      setResult(data);
+      await refreshStatus();
+    } catch (e) {
+      setResult({ ok: false, error: (e as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const lastLabel = status?.lastImport
+    ? new Date(status.lastImport).toLocaleString()
+    : "Never";
+
+  return (
+    <section className="space-y-4 pt-2">
+      <div>
+        <h3 className="text-xs text-neutral-500 uppercase tracking-widest font-semibold mb-1 flex items-center gap-2">
+          <Globe size={12} className="text-orange-500" />
+          Browser Profile
+        </h3>
+        <p className="text-xs text-neutral-600">
+          Import your real Firefox cookies & logins so the agent can operate your accounts.
+        </p>
+      </div>
+
+      <div className="bg-neutral-800/40 rounded-lg p-3 border border-neutral-700/40 space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-neutral-500">Status</span>
+          {status?.imported ? (
+            <span className="flex items-center gap-1 text-emerald-400">
+              <CheckCircle2 size={12} /> Imported
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-amber-400">
+              <AlertCircle size={12} /> Not imported
+            </span>
+          )}
+        </div>
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-neutral-500">Last refresh</span>
+          <span className="text-neutral-300">{lastLabel}</span>
+        </div>
+      </div>
+
+      <button
+        onClick={handleImport}
+        disabled={loading}
+        className="w-full px-4 py-2.5 rounded-lg text-sm font-semibold bg-orange-600 hover:bg-orange-500
+                   text-neutral-950 transition-all disabled:opacity-50 disabled:cursor-not-allowed
+                   shadow-lg shadow-orange-500/10 hover:shadow-orange-500/20
+                   flex items-center justify-center gap-2"
+      >
+        <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+        {loading
+          ? "Copying profile…"
+          : status?.imported
+            ? "Refresh Firefox Data"
+            : "Import Firefox Data"}
+      </button>
+
+      {result && result.ok && (
+        <div className="bg-emerald-950/30 border border-emerald-800/40 rounded-lg p-3 text-xs text-emerald-300 space-y-1">
+          <p className="font-semibold">✓ Profile imported</p>
+          <p className="text-emerald-400/80">
+            {result.copied} entries copied
+            {result.checkpointed.length > 0 && `, WAL checkpointed (${result.checkpointed.join(", ")})`}
+            {result.skipped.length > 0 && `, ${result.skipped.length} skipped (locks/caches)`}
+          </p>
+          {result.firefoxWarning && (
+            <p className="text-amber-400 mt-1">⚠ {result.firefoxWarning}</p>
+          )}
+        </div>
+      )}
+
+      {result && !result.ok && (
+        <div className="bg-red-950/30 border border-red-800/40 rounded-lg p-3 text-xs text-red-300 space-y-1">
+          <p className="font-semibold">Import failed</p>
+          <p className="text-red-400/80 break-all">{result.error}</p>
+        </div>
+      )}
+
+      <p className="text-xs text-neutral-600 leading-relaxed">
+        Close Firefox before refreshing for a complete copy. File locks, caches,
+        and crash data are excluded automatically. WAL journals are checkpointed
+        so the latest cookies are always included.
+      </p>
+    </section>
   );
 }
 
@@ -166,6 +288,10 @@ export default function SettingsPanel({
               onChange={(v) => setDraft((p) => ({ ...p, plannerModel: v }))}
             />
           </section>
+
+          <div className="border-t border-neutral-800" />
+
+          <FirefoxProfileSection />
 
           {/* Info */}
           <div className="bg-neutral-800/50 rounded-lg p-3 border border-neutral-700/40 space-y-1">

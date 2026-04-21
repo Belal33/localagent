@@ -153,12 +153,14 @@ export async function memoryRetrievalNode(state: { messages: unknown[] }) {
         contextParts.push("[END MEMORY CONTEXT]");
         const contextText = contextParts.join("\n");
 
-        const memoryContextMsg = new SystemMessage({ content: contextText });
-
         console.log(`[Memory Retrieval] Injecting ${cappedKnowledge.length} facts + ${cappedEpisodes.length} episodes`);
 
+        // NOTE: we DO NOT push a SystemMessage into `messages` here.
+        // `callModel` reads `memoryContextText` from state and merges it into
+        // its own system prompt. Adding it to `messages` caused reducer-order
+        // bugs where the memory SystemMessage landed AFTER the AI response,
+        // making `afterAgent` route based on the wrong last-message type.
         return {
-            messages: [memoryContextMsg],
             memoryContextText: contextText,
             retrievedMemory: cappedKnowledge,
             retrievedEpisodes: cappedEpisodes,

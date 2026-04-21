@@ -59,7 +59,14 @@ const REPLAN_SYSTEM = new SystemMessage(
     "   - type: 'retry' with a short 'reason'.\n\n" +
     "3. NEVER regenerate or alter the plan. Never return 'continue' when the remaining list is empty — " +
     "use 'done' in that case. Never return 'done' while remaining steps exist — use 'continue'.\n\n" +
-    "Be decisive. If a tool ran and produced reasonable output, treat the step as successful."
+    "Be decisive. If a tool ran and produced reasonable output, treat the step as successful.\n\n" +
+    "OUTPUT FORMAT (STRICT):\n" +
+    "Return a single JSON object. No prose, no markdown fences, no explanation before or after.\n" +
+    `Examples:\n` +
+    `  {"type": "continue"}\n` +
+    `  {"type": "retry", "reason": "curl returned empty — HTML selector mismatch"}\n` +
+    `  {"type": "done", "response": "Scraped top 5 HN stories and saved to file."}\n` +
+    "The `type` field MUST be exactly one of: \"continue\", \"retry\", \"done\"."
 );
 
 // ─── Trajectory extraction ──────────────────────────────────────────────────
@@ -114,11 +121,64 @@ function safeJson(v: unknown): string {
     }
 }
 
+// ─── Parse-recovery helper ──────────────────────────────────────────────────
+// Some models (minimax-m2.7) ignore the Zod schema and reply in prose or
+// with a fenced JSON blob. Coerce whatever we got into the replan shape.
+type ReplanDecision = z.infer<typeof replanSchema>;
+
+function coerceReplanFromText(raw: string): ReplanDecision | null {
+    if (!raw) return null;
+    const trimmed = raw.trim();
+
+    // 1. Try direct JSON parse (possibly fenced).
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const body = (fenced ? fenced[1] : trimmed).trim();
+    try {
+        const obj = JSON.parse(body) as Record<string, unknown>;
+        if (obj && typeof obj === "object" && typeof obj.type === "string") {
+            const t = obj.type.toLowerCase();
+            if (t === "continue" || t === "retry" || t === "done") {
+                return {
+                    type: t,
+                    reason: typeof obj.reason === "string" ? obj.reason : undefined,
+                    response: typeof obj.response === "string" ? obj.response : undefined,
+                };
+            }
+        }
+    } catch {
+        // not JSON — continue to prose heuristic
+    }
+
+    // 2. Prose heuristic: detect decision words + extract reason/response.
+    const lower = trimmed.toLowerCase();
+    const mentionsRetry = /\b(retry|failed|fail|error)\b/.test(lower);
+    const mentionsDone = /\b(done|complete(d)?|finished|task complete)\b/.test(lower);
+    const mentionsContinue = /\b(continue|proceed|next step|move on)\b/.test(lower);
+
+    // Priority: retry > done > continue (failure signals are most actionable).
+    if (mentionsRetry) {
+        // Try to extract a "Reason:" or "**Reason:**" line.
+        const reasonMatch = trimmed.match(/\*{0,2}reason\*{0,2}\s*:\s*([^\n]+)/i);
+        return {
+            type: "retry",
+            reason: reasonMatch ? reasonMatch[1].trim() : truncate(trimmed, 300),
+        };
+    }
+    if (mentionsDone) {
+        return { type: "done", response: truncate(trimmed, 800) };
+    }
+    if (mentionsContinue) {
+        return { type: "continue" };
+    }
+
+    return null;
+}
+
 export async function replanNode(
     state: AgentState,
     config: RunnableConfig
 ): Promise<Partial<AgentState>> {
-    const structuredLLM = getPlannerLLMFromConfig(config).withStructuredOutput(replanSchema);
+    const plannerLLM = getPlannerLLMFromConfig(config);
 
     // ─── Build evaluator context ───────────────────────────────────
     const userMessages = state.messages.filter((m) => m._getType() === "human");
@@ -143,17 +203,52 @@ export async function replanNode(
         ? `\n\n⚠️ This is retry attempt ${state.stepRetries}/${MAX_RETRIES} for this step.`
         : "";
 
-    const result = await structuredLLM.invoke([
-        REPLAN_SYSTEM,
-        new HumanMessage(
-            `ORIGINAL REQUEST:\n${originalRequest}\n\n` +
-            `COMPLETED STEPS:\n${pastStepsText}\n\n` +
-            `CURRENT STEP (just executed): ${state.currentStep}\n\n` +
-            `CURRENT STEP TRAJECTORY:\n${trajectory}\n\n` +
-            `REMAINING STEPS (fixed, cannot be changed):\n${remainingText}` +
-            retryContext
-        ),
-    ]);
+    const evaluatorUserMsg = new HumanMessage(
+        `ORIGINAL REQUEST:\n${originalRequest}\n\n` +
+        `COMPLETED STEPS:\n${pastStepsText}\n\n` +
+        `CURRENT STEP (just executed): ${state.currentStep}\n\n` +
+        `CURRENT STEP TRAJECTORY:\n${trajectory}\n\n` +
+        `REMAINING STEPS (fixed, cannot be changed):\n${remainingText}` +
+        retryContext
+    );
+
+    // ─── Primary: structured output via Zod ───────────────────────────────────
+    let result: ReplanDecision | null = null;
+    try {
+        const structuredLLM = plannerLLM.withStructuredOutput(replanSchema);
+        result = await structuredLLM.invoke([REPLAN_SYSTEM, evaluatorUserMsg]);
+        console.log(`[Replan] Structured output succeeded: type=${result.type}`);
+    } catch (err: unknown) {
+        const e = err as { lc_error_code?: string; message?: string; llmOutput?: string };
+        const isParseError =
+            e?.lc_error_code === "OUTPUT_PARSING_FAILURE" ||
+            /Failed to parse/i.test(e?.message ?? "");
+        if (!isParseError) throw err;
+
+        console.warn(
+            `[Replan] Structured output parse failed — recovering via plain-text invoke. Offending: ${(e.llmOutput ?? "").slice(0, 200)}`
+        );
+
+        // ─── Fallback: plain-text invoke + manual coercion ───────────────────
+        const rawResponse = await plannerLLM.invoke([REPLAN_SYSTEM, evaluatorUserMsg]);
+        const rawText =
+            typeof rawResponse.content === "string"
+                ? rawResponse.content
+                : JSON.stringify(rawResponse.content);
+        result = coerceReplanFromText(rawText);
+
+        if (!result) {
+            // Couldn't coerce — treat as retry with the raw text as reason,
+            // so we don't hang and the retry policy applies.
+            console.warn(`[Replan] Could not coerce fallback output — defaulting to retry`);
+            result = {
+                type: "retry",
+                reason: `Evaluator returned unparseable output: ${truncate(rawText, 200)}`,
+            };
+        } else {
+            console.log(`[Replan] Recovered decision from plain-text fallback: type=${result.type}`);
+        }
+    }
 
     // A short summary of what happened in this step — stored in pastSteps.
     const stepSummary = truncate(trajectory, 600);

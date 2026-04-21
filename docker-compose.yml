@@ -12,7 +12,11 @@ services:
     volumes:
       - .:/app # source code for hot reload
       - /app/node_modules # preserve container node_modules
-      - ${AGENT_WORKSPACE:-/home/agent_worker/workspace}:/workspace # agent sandbox
+      - ${AGENT_WORKSPACE:-/home/agent_worker/workspace}:/home/agent_worker/workspace # agent sandbox
+      - /tmp/.X11-unix:/tmp/.X11-unix # share host X11 socket for headful camofox login
+      - ${FIREFOX_PROFILE_SRC:-/home/belal/snap/firefox/common/.mozilla/firefox/s3x8rw3t.default}:/host-firefox-profile:ro # host Firefox profile (read-only source for import)
+    environment:
+      - DISPLAY=${DISPLAY:-:1} # forward host display into container
     depends_on:
       - postgres
       - neo4j
@@ -34,7 +38,7 @@ services:
     ports:
       - "3333:3333"
     volumes:
-      - ${AGENT_WORKSPACE:-/home/agent_worker/workspace}:/workspace
+      - ${AGENT_WORKSPACE:-/home/agent_worker/workspace}:/home/agent_worker/workspace
     depends_on:
       - postgres
       - neo4j

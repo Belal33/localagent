@@ -83,6 +83,26 @@ docker compose --profile prod up --build
 docker compose up
 ```
 
+### 4. Rebuild the Agent Container
+
+If you need to rebuild the agent container (e.g., after changing `Dockerfile` or `package.json`):
+
+**Option 1: Stop and rebuild all services**
+Stop the currently running `docker compose` process (`Ctrl+C`), then run:
+```bash
+docker compose --profile dev up --build
+```
+
+**Option 2: Rebuild only the app container (keeps DB/infrastructure running)**
+```bash
+docker compose --profile dev up --build -d app-dev
+```
+
+**Option 3: Build the image only without starting**
+```bash
+docker compose --profile dev build app-dev
+```
+
 Open [http://localhost:3333](http://localhost:3333) in your browser.
 
 > **Note**: Use `--build` only the first time or after changing `Dockerfile` / `package.json`. Subsequent runs can omit it.

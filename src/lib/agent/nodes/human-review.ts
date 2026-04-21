@@ -23,11 +23,24 @@ export interface ApprovalDecision {
 }
 
 export function humanReviewNode(state: AgentState): Command {
-    const lastMsg = state.messages[state.messages.length - 1] as AIMessage;
-    const toolCalls = lastMsg.tool_calls ?? [];
+    // Find the most recent AI message with tool calls. Using messages[last]
+    // is unsafe because other nodes may have appended messages after the
+    // agent's response (see memory-retrieval history).
+    let lastMsg: AIMessage | null = null;
+    for (let i = state.messages.length - 1; i >= 0; i--) {
+        const m = state.messages[i];
+        if (m?._getType?.() === "ai") {
+            lastMsg = m as AIMessage;
+            break;
+        }
+    }
+    const toolCalls = lastMsg?.tool_calls ?? [];
+
+    console.log(`[HumanReview] ▶ ENTRY — ${toolCalls.length} tool call(s): ${toolCalls.map(tc => tc.name).join(", ")}`);
 
     if (toolCalls.length === 0) {
         // No tool calls — shouldn't reach here, but route to end
+        console.log(`[HumanReview] ◀ EXIT — no tool calls, goto __end__`);
         return new Command({ goto: "__end__" });
     }
 
@@ -36,8 +49,11 @@ export function humanReviewNode(state: AgentState): Command {
         toolCalls.map((tc) => ({ name: tc.name, args: tc.args as Record<string, unknown> }))
     );
 
+    console.log(`[HumanReview] allSafe=${allSafe}, results=${JSON.stringify(results.map(r => ({ tool: r.toolName, safe: r.safe })))}`);
+
     // All tool calls are whitelisted safe → proceed without interruption
     if (allSafe) {
+        console.log(`[HumanReview] ◀ EXIT — allSafe, goto tools`);
         return new Command({ goto: "tools" });
     }
 
@@ -68,7 +84,7 @@ export function humanReviewNode(state: AgentState): Command {
         return new Command({ goto: "tools" });
     }
 
-    if (decision.action === "edit" && decision.newArgs) {
+    if (decision.action === "edit" && decision.newArgs && lastMsg) {
         // User modified the tool args — update the AI message with new args
         const updatedToolCalls = toolCalls.map((tc) => {
             if (flaggedCalls.some((f) => f.toolName === tc.name)) {

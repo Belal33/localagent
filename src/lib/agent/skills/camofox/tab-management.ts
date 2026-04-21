@@ -8,19 +8,28 @@ const createTab = new DynamicStructuredTool({
     name: "camofox_create_tab",
     description:
         "Open a new browser tab in the anti-detect CamoFox browser and navigate to a URL. " +
-        "Returns a tab ID to use with other camofox tools (snapshot, click, type, etc.).",
+        "Optionally pass a `sessionLabel` to reuse a previously saved login session " +
+        "(e.g. 'github', 'gmail-work'). If no label is given, an anonymous context is used. " +
+        "Returns a tab ID for other camofox_* tools.",
     schema: z.object({
         url: z.string().describe("URL to open"),
+        sessionLabel: z
+            .string()
+            .optional()
+            .describe(
+                "Optional session label. If a saved session exists, cookies/localStorage are restored so the user stays logged in. Use camofox_list_sessions to see available labels.",
+            ),
     }),
-    func: async ({ url }) => {
+    func: async ({ url, sessionLabel }) => {
         try {
-            const page = await newPage();
+            const page = await newPage(sessionLabel);
             await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-            const tabId = registerPage(page);
+            const tabId = registerPage(page, sessionLabel);
             const title = await page.title();
-            return `Tab created: ${tabId}\nURL: ${page.url()}\nTitle: ${title}`;
-        } catch (error: any) {
-            return `Failed to create tab: ${error.message}`;
+            return `Tab created: ${tabId}\nSession: ${sessionLabel ?? "(anonymous)"}\nURL: ${page.url()}\nTitle: ${title}`;
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            return `Failed to create tab: ${msg}`;
         }
     },
 });
@@ -33,9 +42,10 @@ const listTabs = new DynamicStructuredTool({
         try {
             const tabs = listPages();
             if (tabs.length === 0) return "No open tabs.";
-            return tabs.map((t) => `• ${t.tabId}: ${t.url}`).join("\n");
-        } catch (error: any) {
-            return `Failed to list tabs: ${error.message}`;
+            return tabs.map((t) => `• ${t.tabId} [${t.label}]: ${t.url}`).join("\n");
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            return `Failed to list tabs: ${msg}`;
         }
     },
 });
@@ -53,8 +63,9 @@ const closeTab = new DynamicStructuredTool({
             await page.close();
             removePage(tabId);
             return `Tab ${tabId} closed.`;
-        } catch (error: any) {
-            return `Failed to close tab: ${error.message}`;
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            return `Failed to close tab: ${msg}`;
         }
     },
 });

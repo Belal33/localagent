@@ -27,7 +27,7 @@ const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
 
 // ─── LLM via OpenCode Zen (OpenAI-compatible) — lazily initialized ──────────
 let _llm: ChatOpenAI | null = null;
-let _llmModel = "minimax-m2.7";
+let _llmModel = "mimo-v2-pro";
 
 export function getLLM(model?: string): ChatOpenAI {
   const targetModel = model || _llmModel;
@@ -128,7 +128,44 @@ async function callModel(state: typeof GraphAnnotation.State, config: RunnableCo
 
   // Try with tools first; fall back to no-tools if model returns empty
   // (minimax-m2.7 via OpenCode doesn't support OpenAI function calling)
-  let response = await llmWithTools.invoke([systemMsg, ...conversationMessages]);
+  let response;
+  let parseRecovered = false;
+  try {
+    response = await llmWithTools.invoke([systemMsg, ...conversationMessages]);
+  } catch (err: unknown) {
+    // minimax-m2.7 sometimes emits a bogus "[TOOL_CALL]...[/TOOL_CALL]" text
+    // block instead of real OpenAI function calls, which triggers
+    // OUTPUT_PARSING_FAILURE. Retry with a stricter instruction.
+    const e = err as { lc_error_code?: string; message?: string; llmOutput?: string };
+    const isParseError =
+      e?.lc_error_code === "OUTPUT_PARSING_FAILURE" ||
+      /Failed to parse/i.test(e?.message ?? "");
+    if (!isParseError) throw err;
+
+    console.warn(`[Agent] OUTPUT_PARSING_FAILURE caught — retrying with stricter prompt. Offending output: ${(e.llmOutput ?? "").slice(0, 200)}`);
+
+    const stricterSystem = new SystemMessage(
+      systemContent +
+      `\n\n[TOOL CALL FORMAT — STRICT]\n` +
+      `Your previous response used an invalid tool-call format and was rejected.\n` +
+      `DO NOT emit text like "[TOOL_CALL]...[/TOOL_CALL]" or pseudo-JSON with "=>".\n` +
+      `You have two — and only two — valid options for this turn:\n` +
+      `  1. Call a tool using the native function-calling API (no custom text markers).\n` +
+      `  2. Reply with plain prose only (no tool syntax at all).\n` +
+      `If the model cannot make a real tool call, prefer option 2 and describe what you would do.`
+    );
+
+    try {
+      response = await llmWithTools.invoke([stricterSystem, ...conversationMessages]);
+      parseRecovered = true;
+    } catch (retryErr) {
+      // Final fallback: no tools bound at all — guaranteed plain text response.
+      console.warn(`[Agent] Retry with stricter prompt also failed — falling back to plain-text (no tools)`);
+      const llmNoTools = getLLM(chatModel);
+      response = await llmNoTools.invoke([stricterSystem, ...conversationMessages]);
+      parseRecovered = true;
+    }
+  }
 
   const isEmpty = !response.content && (!response.tool_calls || response.tool_calls.length === 0);
   if (isEmpty) {
@@ -138,7 +175,7 @@ async function callModel(state: typeof GraphAnnotation.State, config: RunnableCo
   }
 
   const contentLen = typeof response.content === 'string' ? response.content.length : JSON.stringify(response.content).length;
-  console.log(`[Agent] Response: ${contentLen} chars, ${response.tool_calls?.length ?? 0} tool calls${isEmpty ? ' (fallback)' : ''}`);
+  console.log(`[Agent] Response: ${contentLen} chars, ${response.tool_calls?.length ?? 0} tool calls${isEmpty ? ' (fallback)' : ''}${parseRecovered ? ' (parse-recovered)' : ''}`);
   return { messages: [response] };
 }
 
@@ -153,6 +190,8 @@ async function toolsWithActivation(state: typeof GraphAnnotation.State) {
   const lastMsg = state.messages[state.messages.length - 1] as AIMessage;
   const toolCalls = lastMsg.tool_calls ?? [];
 
+  console.log(`[Tools] ▶ ENTRY — ${toolCalls.length} tool call(s): ${toolCalls.map(tc => `${tc.name}(${JSON.stringify(tc.args).slice(0, 80)})`).join(", ")}`);
+
   // Detect any skill activation calls
   const activatedSkills: string[] = [];
   for (const tc of toolCalls) {
@@ -163,7 +202,16 @@ async function toolsWithActivation(state: typeof GraphAnnotation.State) {
   }
 
   // Execute all tool calls via the standard ToolNode
-  const result = await toolNode.invoke(state);
+  let result;
+  try {
+    result = await toolNode.invoke(state);
+  } catch (err) {
+    console.error(`[Tools] ✗ ToolNode.invoke THREW:`, err);
+    throw err;
+  }
+
+  const resultMsgs = (result as { messages?: ToolMessage[] })?.messages ?? [];
+  console.log(`[Tools] ◀ EXIT — produced ${resultMsgs.length} ToolMessage(s), activatedSkills=[${activatedSkills.join(",")}]`);
 
   // If any skills were activated, update state
   if (activatedSkills.length > 0) {
@@ -179,12 +227,25 @@ async function toolsWithActivation(state: typeof GraphAnnotation.State) {
 // ─── Conditional Routing: After Agent ───────────────────────────────────────
 function afterAgent(state: typeof GraphAnnotation.State) {
   const { messages } = state;
-  const lastMessage = messages[messages.length - 1] as AIMessage;
-  if (lastMessage?.tool_calls?.length) {
-    return "humanReview"; // Route through safety check
+  // Find the most recent AI message. Using messages[last] is unsafe because
+  // other nodes (historically the memory-retrieval node) may append their
+  // own messages via the reducer AFTER the agent's response.
+  let lastAi: AIMessage | null = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?._getType?.() === "ai") {
+      lastAi = messages[i] as AIMessage;
+      break;
+    }
   }
-  // No tool calls — check if we're in plan-execute mode
-  if (state.plan.length > 0) {
+  const hasToolCalls = !!lastAi?.tool_calls?.length;
+  const inPlan = state.plan.length > 0;
+  const decision = hasToolCalls ? "humanReview" : (inPlan ? "replan" : "__end__");
+  const tailType = messages[messages.length - 1]?._getType?.();
+  console.log(`[Router afterAgent] tail.type=${tailType}, lastAi.tool_calls=${lastAi?.tool_calls?.length ?? 0}, plan.length=${state.plan.length} → ${decision}`);
+  if (hasToolCalls) {
+    return "humanReview";
+  }
+  if (inPlan) {
     return "replan";
   }
   return "__end__";

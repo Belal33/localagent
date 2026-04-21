@@ -26,3 +26,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_episodic_thread
 
 CREATE INDEX IF NOT EXISTS idx_episodic_user
     ON episodic_memories (user_id);
+
+-- ─── Camofox: encrypted credentials vault ────────────────────────────────────
+-- Stores AES-256-GCM encrypted username/password pairs per site label.
+-- Ciphertext format: iv(12) | authTag(16) | ciphertext, base64-encoded.
+-- The encryption key comes from AGENT_SECRET_KEY env var (never stored in DB).
+CREATE TABLE IF NOT EXISTS camofox_credentials (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    label        TEXT NOT NULL UNIQUE,       -- e.g. "github", "gmail-work"
+    site         TEXT NOT NULL,              -- e.g. "https://github.com/login"
+    username_enc TEXT NOT NULL,              -- encrypted username (base64)
+    password_enc TEXT NOT NULL,              -- encrypted password (base64)
+    notes        TEXT,                       -- optional plain notes (selector hints, etc.)
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_camofox_credentials_label
+    ON camofox_credentials (label);
