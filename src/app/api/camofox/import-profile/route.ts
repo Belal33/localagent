@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import {
-    importFirefoxProfile,
+    importFirefoxCookies,
     getLastImportTime,
+    hasCookiesImported,
     HOST_PROFILE_SRC,
-    CAMOFOX_USER_DATA_DIR,
 } from "@/lib/agent/skills/camofox/profile-import";
+import { SESSIONS_DIR } from "@/lib/agent/skills/camofox/shared";
 
 export const runtime = "nodejs";
 
@@ -13,16 +14,16 @@ export async function GET() {
     const lastImport = await getLastImportTime();
     return NextResponse.json({
         hostProfilePath: HOST_PROFILE_SRC,
-        userDataDir: CAMOFOX_USER_DATA_DIR,
+        sessionsDir: SESSIONS_DIR,
         lastImport,
-        imported: lastImport !== null,
+        imported: await hasCookiesImported(),
     });
 }
 
-/** POST — re-imports the host Firefox profile into the agent's data dir. */
+/** POST — extracts cookies from host Firefox profile into Camoufox. */
 export async function POST() {
     try {
-        const result = await importFirefoxProfile();
+        const result = await importFirefoxCookies();
         return NextResponse.json({
             ok: true,
             ...result,

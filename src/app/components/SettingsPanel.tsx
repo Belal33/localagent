@@ -88,7 +88,7 @@ function FirefoxProfileSection() {
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<
-    | { ok: true; copied: number; skipped: string[]; bytes: number; checkpointed: string[]; firefoxWarning: string | null }
+    | { ok: true; cookiesImported: number; firefoxWarning: string | null }
     | { ok: false; error: string }
     | null
   >(null);
@@ -172,11 +172,9 @@ function FirefoxProfileSection() {
 
       {result && result.ok && (
         <div className="bg-emerald-950/30 border border-emerald-800/40 rounded-lg p-3 text-xs text-emerald-300 space-y-1">
-          <p className="font-semibold">✓ Profile imported</p>
+          <p className="font-semibold">✓ Cookies imported</p>
           <p className="text-emerald-400/80">
-            {result.copied} entries copied
-            {result.checkpointed.length > 0 && `, WAL checkpointed (${result.checkpointed.join(", ")})`}
-            {result.skipped.length > 0 && `, ${result.skipped.length} skipped (locks/caches)`}
+            {result.cookiesImported} cookies extracted from Firefox and loaded into the agent.
           </p>
           {result.firefoxWarning && (
             <p className="text-amber-400 mt-1">⚠ {result.firefoxWarning}</p>
@@ -192,9 +190,8 @@ function FirefoxProfileSection() {
       )}
 
       <p className="text-xs text-neutral-600 leading-relaxed">
-        Close Firefox before refreshing for a complete copy. File locks, caches,
-        and crash data are excluded automatically. WAL journals are checkpointed
-        so the latest cookies are always included.
+        Only cookies are extracted — no profile format compatibility issues.
+        Close Firefox first for the most complete cookie import.
       </p>
     </section>
   );

@@ -1,59 +1,33 @@
 import { Camoufox } from "camoufox-js";
 import type { Browser, Page, BrowserContext } from "playwright-core";
-import { mkdir, readFile, writeFile, readdir, unlink, stat } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { encrypt, decrypt, isEncryptionAvailable } from "./crypto";
+import { IMPORTED_COOKIES_LABEL } from "./profile-import";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-// Headless for the regular (non-persistent) browser.
-// Only show a window when explicitly running on a real display outside Docker.
-const HEADLESS = process.env.NODE_ENV === "production" || !process.env.DISPLAY;
+// Always headless — the agent never needs a visible window. Login sessions
+// come from imported Firefox cookies or saved storageState files.
+const HEADLESS = true;
 
-// Persistent context is ALWAYS headless — the imported profile already carries
-// all logins, so there is no reason to open a visible window. This also avoids
-// X11 authorization errors when DISPLAY is set but the auth cookie is absent.
-const PERSISTENT_HEADLESS = true;
-
-// Persistent user-data-dir (contains imported Firefox profile). When present,
-// Camoufox is launched with launchPersistentContext and all browsing happens
-// in that single context — the session-label system is bypassed.
-// Must match CAMOFOX_USER_DATA_DIR in profile-import.ts.
-const USER_DATA_DIR =
-    process.env.CAMOFOX_USER_DATA_DIR ?? "/home/agent_worker/workspace/.camofox-profile";
-
-// Where encrypted per-label storageState JSONs live (legacy / fallback mode).
+// Encrypted storageState files live here (on the bind-mounted volume).
 export const SESSIONS_DIR =
     process.env.CAMOFOX_SESSIONS_DIR ?? "/home/agent_worker/workspace/.camofox-sessions";
 
 const DEFAULT_LABEL = "__default__";
-const PERSISTENT_LABEL = "__persistent__";
 
-// ─── Mode detection ─────────────────────────────────────────────────────────
+// ─── Browser Lifecycle ──────────────────────────────────────────────────────
 
-async function isPersistentMode(): Promise<boolean> {
-    // Only use persistent mode if the user-data-dir has been populated with
-    // an imported profile (marker file present).
-    try {
-        await stat(path.join(USER_DATA_DIR, ".camofox-imported-at"));
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-// ─── Browser / Context Lifecycle ────────────────────────────────────────────
-
-// In non-persistent mode we have a single Browser and many Contexts (one per label).
 let browser: Browser | null = null;
-const contexts = new Map<string, BrowserContext>();
 
-// In persistent mode we have a single Context (no Browser handle).
-let persistentContext: BrowserContext | null = null;
+// One BrowserContext per session label — allows the agent to operate multiple
+// accounts at the same time (e.g. "github", "gmail-work", "__default__").
+const contexts = new Map<string, BrowserContext>();
 
 export async function getBrowser(): Promise<Browser> {
     if (browser && browser.isConnected()) return browser;
-    console.log("[camofox] Launching Camoufox browser…");
+    console.log("[camofox] Launching Camoufox browser (headless)…");
     browser = await Camoufox({
         headless: HEADLESS,
         os: "linux",
@@ -62,23 +36,7 @@ export async function getBrowser(): Promise<Browser> {
     return browser!;
 }
 
-/**
- * Returns the one-and-only persistent BrowserContext, launching Camoufox
- * against the user-data-dir on first call. This context carries every
- * cookie, login, and extension imported from your Firefox profile.
- */
-async function getPersistentContext(): Promise<BrowserContext> {
-    if (persistentContext) return persistentContext;
-    console.log(`[camofox] Launching Camoufox (headless) against user-data-dir: ${USER_DATA_DIR}`);
-    persistentContext = await Camoufox({
-        headless: PERSISTENT_HEADLESS,
-        os: "linux",
-        user_data_dir: USER_DATA_DIR,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any) as unknown as BrowserContext;
-    console.log("[camofox] Persistent context ready.");
-    return persistentContext;
-}
+// ─── StorageState helpers ────────────────────────────────────────────────────
 
 async function sessionFilePath(label: string): Promise<string> {
     await mkdir(SESSIONS_DIR, { recursive: true });
@@ -90,8 +48,7 @@ async function loadStorageState(label: string): Promise<object | null> {
     try {
         const fp = await sessionFilePath(label);
         const enc = await readFile(fp, "utf8");
-        const json = decrypt(enc.trim());
-        return JSON.parse(json);
+        return JSON.parse(decrypt(enc.trim()));
     } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "ENOENT") return null;
@@ -99,40 +56,50 @@ async function loadStorageState(label: string): Promise<object | null> {
     }
 }
 
+// ─── Context Management ─────────────────────────────────────────────────────
+
 /**
- * Returns the BrowserContext to use for a given label.
- *  - Persistent mode: ignores `label` and always returns the single
- *    persistent context backed by the imported Firefox profile.
- *  - Legacy mode: returns a per-label ephemeral context with optional
- *    encrypted storageState restore.
+ * Returns the BrowserContext for a session label, creating it on demand.
+ *
+ * Special behaviour for the default label:
+ *   - If Firefox cookies have been imported (via the Settings panel), they are
+ *     loaded automatically so the agent is already logged into every site you
+ *     use on your host browser.
+ *   - If a __default__ storageState file also exists it takes precedence.
+ *
+ * For any other label the saved encrypted storageState is loaded if present.
  */
 export async function getContext(label: string = DEFAULT_LABEL): Promise<BrowserContext> {
-    if (await isPersistentMode()) {
-        return getPersistentContext();
-    }
     const existing = contexts.get(label);
     if (existing) return existing;
 
     const b = await getBrowser();
-    const storageState = await loadStorageState(label);
+
+    // Determine which storageState to load:
+    //   1. The label's own saved session (highest priority)
+    //   2. For the default label: fall back to imported Firefox cookies
+    let storageState = await loadStorageState(label);
+    if (!storageState && label === DEFAULT_LABEL) {
+        storageState = await loadStorageState(IMPORTED_COOKIES_LABEL);
+        if (storageState) {
+            console.log("[camofox] Loaded imported Firefox cookies into default context.");
+        }
+    } else if (storageState) {
+        console.log(`[camofox] Restored saved session for "${label}".`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ctx = storageState
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ? await b.newContext({ storageState: storageState as any })
         : await b.newContext();
+
     contexts.set(label, ctx);
-    if (storageState) {
-        console.log(`[camofox] Restored session for "${label}".`);
-    }
     return ctx;
 }
 
 export async function saveSession(label: string = DEFAULT_LABEL): Promise<string> {
     if (!isEncryptionAvailable()) {
         throw new Error("AGENT_SECRET_KEY is not set; cannot encrypt session.");
-    }
-    if (await isPersistentMode()) {
-        // Persistent mode writes its own profile continuously; no action needed.
-        return "(persistent mode — cookies are auto-saved to the Firefox profile)";
     }
     const ctx = contexts.get(label);
     if (!ctx) throw new Error(`No active context for label "${label}". Open a tab first.`);
@@ -148,7 +115,9 @@ export async function listSessions(): Promise<string[]> {
         const files = await readdir(SESSIONS_DIR);
         return files
             .filter((f) => f.endsWith(".json.enc"))
-            .map((f) => f.replace(/\.json\.enc$/, ""));
+            .map((f) => f.replace(/\.json\.enc$/, ""))
+            // Hide the internal import label from the agent's session list
+            .filter((l) => l !== IMPORTED_COOKIES_LABEL);
     } catch {
         return [];
     }
@@ -220,15 +189,8 @@ export async function closeBrowser(): Promise<void> {
         try { await ctx.close(); } catch { /* ignore */ }
     }
     contexts.clear();
-    if (persistentContext) {
-        try { await persistentContext.close(); } catch { /* ignore */ }
-        persistentContext = null;
-    }
     if (browser) {
         try { await browser.close(); } catch { /* ignore */ }
         browser = null;
     }
 }
-
-// Export so UI / profile-import can check mode
-export { isPersistentMode, USER_DATA_DIR, PERSISTENT_LABEL };

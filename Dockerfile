@@ -31,8 +31,10 @@ RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD= npx camoufox fetch && chmod -R 755 /root/.
 # ── Dev target (source mounted as volume, hot reload) ────────────────────────
 FROM base AS dev
 ENV NODE_ENV=development
-# Create workspace directory for agent sandbox
-RUN mkdir -p /workspace
+# Create the workspace directory. In dev this is overridden by the bind-mount
+# at /home/agent_worker/workspace; the mkdir ensures it exists if running
+# outside Docker without a mount.
+RUN mkdir -p /home/agent_worker/workspace
 EXPOSE 3333
 CMD ["npx", "next", "dev", "-p", "3333"]
 
@@ -48,6 +50,6 @@ ENV AGENT_PG_URI=postgresql://x:x@localhost/x
 ENV AGENT_NEO4J_URI=bolt://localhost:7687
 RUN npm run build
 ENV NODE_ENV=production
-RUN mkdir -p /workspace
+RUN mkdir -p /home/agent_worker/workspace
 EXPOSE 3333
 CMD ["npx", "next", "start", "-p", "3333"]
