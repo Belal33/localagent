@@ -75,17 +75,44 @@ export async function getContext(label: string = DEFAULT_LABEL): Promise<Browser
 
     const b = await getBrowser();
 
-    // Determine which storageState to load:
-    //   1. The label's own saved session (highest priority)
-    //   2. For the default label: fall back to imported Firefox cookies
-    let storageState = await loadStorageState(label);
-    if (!storageState && label === DEFAULT_LABEL) {
-        storageState = await loadStorageState(IMPORTED_COOKIES_LABEL);
-        if (storageState) {
-            console.log("[camofox] Loaded imported Firefox cookies into default context.");
+    let storageState: object | null = null;
+
+    if (label === DEFAULT_LABEL) {
+        // For the default context, Firefox import cookies are always the base —
+        // they represent the user's current real login state. Any previously
+        // saved __default__ session is merged on top but Firefox cookies win
+        // for overlapping domains (they are always fresher).
+        const firefoxState = await loadStorageState(IMPORTED_COOKIES_LABEL) as
+            { cookies: Record<string, unknown>[]; origins: unknown[] } | null;
+        const savedState = await loadStorageState(DEFAULT_LABEL) as
+            { cookies: Record<string, unknown>[]; origins: unknown[] } | null;
+
+        if (firefoxState) {
+            const firefoxCookies = firefoxState.cookies ?? [];
+            // Domains covered by Firefox import — saved cookies for these are stale
+            const firefoxDomains = new Set(
+                firefoxCookies.map((c) => String(c.domain ?? "").replace(/^\./, ""))
+            );
+            const savedCookies = (savedState?.cookies ?? []).filter(
+                (c) => !firefoxDomains.has(String(c.domain ?? "").replace(/^\./, ""))
+            );
+            storageState = {
+                cookies: [...firefoxCookies, ...savedCookies],
+                origins: savedState?.origins ?? [],
+            };
+            console.log(
+                `[camofox] Default context: ${firefoxCookies.length} Firefox cookies + ` +
+                `${savedCookies.length} saved cookies loaded.`
+            );
+        } else if (savedState) {
+            storageState = savedState;
+            console.log("[camofox] Default context: restored from saved session (no Firefox import).");
         }
-    } else if (storageState) {
-        console.log(`[camofox] Restored saved session for "${label}".`);
+    } else {
+        storageState = await loadStorageState(label);
+        if (storageState) {
+            console.log(`[camofox] Restored saved session for "${label}".`);
+        }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -176,6 +203,65 @@ export function listPages(): Array<{ tabId: string; url: string; label: string }
         }
     }
     return result;
+}
+
+/**
+ * After a Firefox cookie re-import, reload cookies into every running context.
+ *
+ * Strategy:
+ *  1. Try addCookies on all live contexts (keeps open pages alive).
+ *  2. Always evict the default context from the map so the next getContext()
+ *     call rebuilds it fresh from the new .enc file — this is the most
+ *     reliable guarantee that the agent picks up new logins immediately.
+ */
+export async function refreshImportedCookies(): Promise<number> {
+    const storageState = await loadStorageState(IMPORTED_COOKIES_LABEL);
+    if (!storageState) return 0;
+    const { cookies } = storageState as { cookies: object[] };
+    if (!cookies?.length) return 0;
+
+    let refreshed = 0;
+    const labelsToEvict: string[] = [];
+
+    for (const [label, ctx] of contexts) {
+        try {
+            await ctx.addCookies(cookies as Parameters<typeof ctx.addCookies>[0]);
+            refreshed++;
+        } catch {
+            labelsToEvict.push(label);
+        }
+    }
+
+    // Always evict the default context so the next getContext() call creates a
+    // brand-new context from the freshly-written .enc file.
+    const defaultCtx = contexts.get(DEFAULT_LABEL);
+    if (defaultCtx) {
+        // Close every page on the default context — they hold stale cookies and
+        // the agent must be forced to open a new tab to pick up the refresh.
+        const pageCount = defaultCtx.pages().length;
+        try {
+            for (const p of defaultCtx.pages()) {
+                try { await p.close(); } catch { /* ignore */ }
+            }
+            await defaultCtx.close();
+        } catch { /* ignore */ }
+        contexts.delete(DEFAULT_LABEL);
+        // Drop default-context tab IDs from the registry — agent must recreate
+        for (const [tabId, entry] of pages) {
+            if (entry.label === DEFAULT_LABEL) pages.delete(tabId);
+        }
+        console.log(
+            `[camofox] Default context evicted (closed ${pageCount} stale page(s)). ` +
+            `Agent must call camofox_create_tab again to use fresh cookies.`
+        );
+    }
+    for (const label of labelsToEvict) {
+        const ctx = contexts.get(label);
+        if (ctx) { try { await ctx.close(); } catch { /* ignore */ } }
+        contexts.delete(label);
+    }
+
+    return refreshed;
 }
 
 // ─── Cleanup ────────────────────────────────────────────────────────────────

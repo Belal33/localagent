@@ -22,6 +22,13 @@ export interface Skill {
     description: string;
     tools: DynamicStructuredTool[];
     alwaysActive: boolean;
+    /**
+     * Optional hook called every time the skill is (re)activated via its
+     * `use_<name>` placeholder. Use this to reset any in-memory resources
+     * the skill holds (e.g. close stale browser sessions) so each fresh
+     * activation starts from a clean slate.
+     */
+    onActivate?: () => Promise<string | void>;
 }
 
 // ─── Skill Registry ─────────────────────────────────────────────────────────
@@ -68,9 +75,21 @@ export function getSkillPlaceholderTools(): DynamicStructuredTool[] {
                     schema: z.object({}),
                     func: async () => {
                         const toolNames = skill.tools.map((t) => t.name).join(", ");
+                        let extra = "";
+                        if (skill.onActivate) {
+                            try {
+                                const r = await skill.onActivate();
+                                if (typeof r === "string" && r) extra = ` ${r}`;
+                            } catch (err) {
+                                console.warn(
+                                    `[skills] onActivate hook for "${skill.name}" failed:`,
+                                    err,
+                                );
+                            }
+                        }
                         return (
                             `✅ Skill "${skill.name}" activated! ` +
-                            `You now have access to: ${toolNames}. ` +
+                            `You now have access to: ${toolNames}.${extra} ` +
                             `Use these tools directly in your next action.`
                         );
                     },

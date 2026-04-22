@@ -5,7 +5,7 @@ import {
     hasCookiesImported,
     HOST_PROFILE_SRC,
 } from "@/lib/agent/skills/camofox/profile-import";
-import { SESSIONS_DIR } from "@/lib/agent/skills/camofox/shared";
+import { SESSIONS_DIR, refreshImportedCookies } from "@/lib/agent/skills/camofox/shared";
 
 export const runtime = "nodejs";
 
@@ -24,9 +24,13 @@ export async function GET() {
 export async function POST() {
     try {
         const result = await importFirefoxCookies();
+        // Push fresh cookies into any already-running browser contexts so the
+        // agent picks them up immediately without a browser restart.
+        const refreshed = await refreshImportedCookies();
         return NextResponse.json({
             ok: true,
             ...result,
+            contextsRefreshed: refreshed,
             lastImport: await getLastImportTime(),
         });
     } catch (err: unknown) {
