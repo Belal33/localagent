@@ -266,17 +266,60 @@ export async function refreshImportedCookies(): Promise<number> {
 
 // ─── Cleanup ────────────────────────────────────────────────────────────────
 
+/**
+ * Tear down the browser and every context. Defensive — uses a hard timeout
+ * on each Playwright close call so a wedged browser process can't block the
+ * activation hook, and pkills any orphaned camoufox-bin processes left behind
+ * by previous (now-unreachable) browser handles.
+ */
 export async function closeBrowser(): Promise<void> {
+    // Helper: race a promise against a timeout
+    const withTimeout = async <T>(p: Promise<T>, ms: number): Promise<T | null> => {
+        let timer: NodeJS.Timeout | undefined;
+        const timeout = new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), ms);
+        });
+        try {
+            return await Promise.race([p, timeout]);
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    };
+
+    // 1. Close all pages (3s timeout each)
     for (const [id, entry] of pages) {
-        try { await entry.page.close(); } catch { /* ignore */ }
+        await withTimeout(entry.page.close().catch(() => undefined), 3000);
         pages.delete(id);
     }
+
+    // 2. Close all contexts (3s timeout each)
     for (const [, ctx] of contexts) {
-        try { await ctx.close(); } catch { /* ignore */ }
+        await withTimeout(ctx.close().catch(() => undefined), 3000);
     }
     contexts.clear();
+
+    // 3. Close the browser (5s timeout — graceful)
     if (browser) {
-        try { await browser.close(); } catch { /* ignore */ }
+        await withTimeout(browser.close().catch(() => undefined), 5000);
         browser = null;
     }
+
+    // 4. Kill any leftover camoufox-bin parent processes. These accumulate
+    //    when the dev-server hot-reloads this module (the `browser` variable
+    //    resets but the OS process stays alive) or when graceful close fails.
+    //    We only target -no-remote parents (not contentproc children — those
+    //    will exit when their parent dies).
+    try {
+        const { spawn } = await import("node:child_process");
+        await new Promise<void>((resolve) => {
+            const proc = spawn("pkill", ["-f", "camoufox-bin -no-remote"], {
+                stdio: "ignore",
+            });
+            proc.on("exit", () => resolve());
+            proc.on("error", () => resolve());
+            // Hard cap in case pkill hangs
+            setTimeout(() => { try { proc.kill(); } catch { /* ignore */ } resolve(); }, 2000);
+        });
+        console.log("[camofox] Cleanup: pkilled any leftover camoufox-bin processes.");
+    } catch { /* ignore — pkill may not be available */ }
 }
