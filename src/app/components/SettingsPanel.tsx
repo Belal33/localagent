@@ -11,10 +11,14 @@ export interface ModelSettings {
 export const GO_MODELS = [
   { id: "minimax-m2.7",  label: "MiniMax M2.7",  note: "Best quality" },
   { id: "minimax-m2.5",  label: "MiniMax M2.5",  note: "Fast & cheap" },
+  { id: "glm-5.1",       label: "GLM-5.1",       note: "High reasoning" },
   { id: "glm-5",         label: "GLM-5",          note: "High reasoning" },
-  { id: "kimi-k2.5",    label: "Kimi K2.5",      note: "Long context" },
+  { id: "kimi-k2.6",     label: "Kimi K2.6",      note: "Long context" },
+  { id: "kimi-k2.5",     label: "Kimi K2.5",      note: "Long context" },
   { id: "mimo-v2-pro",   label: "MiMo V2 Pro",   note: "Code focus" },
-  { id: "mimo-v2-omni",  label: "MiMo V2 Omni",  note: "Multimodal" },
+  { id: "mimo-v2-omni",  label: "MiMo V2 Omni",   note: "Multimodal" },
+  { id: "qwen3.6-plus",  label: "Qwen3.6 Plus",  note: "Balanced" },
+  { id: "qwen3.5-plus",  label: "Qwen3.5 Plus",  note: "Fast & cheap" },
 ];
 
 export const DEFAULT_SETTINGS: ModelSettings = {
@@ -294,7 +298,7 @@ export default function SettingsPanel({
           <div className="bg-neutral-800/50 rounded-lg p-3 border border-neutral-700/40 space-y-1">
             <p className="text-xs text-neutral-400 font-semibold">OpenCode Go Plan</p>
             <p className="text-xs text-neutral-600 leading-relaxed">
-              6 models · $10/mo · Up to $60/mo usage · Changes apply to the next
+              10 models · $10/mo · Up to $60/mo usage · Changes apply to the next
               message.
             </p>
           </div>
