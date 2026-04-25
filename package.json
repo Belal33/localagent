@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "dev:full": "bash scripts/compose-full.sh dev",
+    "prod:full": "bash scripts/compose-full.sh prod",
+    "infra:full": "bash scripts/compose-full.sh infra",
     "dev": "next dev -p 3333",
     "build": "next build",
     "start": "next start -p 3333",

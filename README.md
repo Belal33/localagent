@@ -68,6 +68,26 @@ WORKSPACE_ROOT=/workspace
 
 ### 3. Start the Agent
 
+**Full development stack** (recommended: app + Docker services + GNOME MCP bridge + X11 proxy):
+```bash
+npm run dev:full
+```
+
+**Full production stack** (built app + Docker services + GNOME MCP bridge + X11 proxy):
+```bash
+npm run prod:full
+```
+
+**Infrastructure only** (Postgres + Neo4j + Scrapling MCP + Cognee):
+```bash
+npm run infra:full
+```
+
+Pass Docker Compose flags after `--` when needed:
+```bash
+npm run dev:full -- --build
+```
+
 **Development** (hot reload, source code mounted):
 ```bash
 docker compose --profile dev up
@@ -78,7 +98,7 @@ docker compose --profile dev up
 docker compose --profile prod up --build
 ```
 
-**Infrastructure only** (Postgres + Neo4j, no app):
+**Infrastructure only** (no app):
 ```bash
 docker compose up
 ```
@@ -121,6 +141,79 @@ Open [http://localhost:3333](http://localhost:3333) in your browser.
 ### Host Service Access
 
 Services running on your host machine (Ollama, Anthropic proxy) are accessible from the container via `host.docker.internal`. This is configured automatically via `extra_hosts` in `docker-compose.yml`.
+
+### GNOME Desktop Skill
+
+The `gnome` skill exposes Ubuntu/GNOME desktop controls to the agent after it calls `use_gnome`. It can send desktop notifications, launch apps, open files/URLs, set wallpaper, adjust volume, control media playback, toggle quick settings, take screenshots, manage windows, and use GNOME Keyring.
+
+Because the agent runs in Docker, the upstream `gnome-mcp-server` must run on the host GNOME session and be exposed through an HTTP MCP bridge.
+
+The recommended startup command handles the host bridge and X11 proxy automatically:
+
+```bash
+npm run dev:full
+```
+
+For production mode, use:
+
+```bash
+npm run prod:full
+```
+
+The manual setup below is useful for debugging or running the pieces separately.
+
+1. Install the upstream MCP server on the host:
+
+```bash
+git clone https://github.com/bilelmoussaoui/gnome-mcp-server.git /tmp/gnome-mcp-server
+cd /tmp/gnome-mcp-server
+cargo install --path .
+```
+
+2. Install a stdio-to-Streamable HTTP MCP bridge on the host, for example `supergateway`:
+
+```bash
+npm install -g supergateway
+```
+
+3. Start the host bridge:
+
+```bash
+supergateway --stdio "$HOME/.cargo/bin/gnome-mcp-server" --outputTransport streamableHttp --port 8930
+```
+
+4. Configure the app container if you use a non-default URL:
+
+```env
+GNOME_MCP_URL=http://host.docker.internal:8930/mcp
+```
+
+The default is already `http://host.docker.internal:8930/mcp`, so no environment variable is needed if you use the command above.
+
+Some window-management actions use GNOME Shell `Eval` and require GNOME Shell unsafe mode. Enable it from Looking Glass with `Alt+F2`, enter `lg`, then run:
+
+```js
+global.context.unsafe_mode = true
+```
+
+The `npm run dev:full` and `npm run prod:full` launchers check unsafe mode at startup and print a warning if it is disabled. They do not enable unsafe mode automatically because it allows arbitrary JavaScript evaluation inside GNOME Shell. Basic X11 window operations still use the fallback path when unsafe mode is off.
+
+On X11 sessions, the app also includes a fallback path using `wmctrl`, `xdotool`, and `x11-utils` for common window-management actions if unsafe mode is not enabled. Rebuild the app image after Dockerfile changes so those tools are available in the container.
+
+If X11 tools inside Docker report `Cannot open display`, your X server may only accept connections through the host's abstract Unix socket, which a bind-mounted `/tmp/.X11-unix` does not expose. Start a host-side filesystem-socket proxy and point the app at it:
+
+```bash
+rm -f /tmp/.X11-unix/X99
+socat UNIX-LISTEN:/tmp/.X11-unix/X99,fork,mode=777 ABSTRACT-CONNECT:/tmp/.X11-unix/X1
+```
+
+Then set the app container display override:
+
+```env
+AGENT_X11_DISPLAY=:99
+```
+
+Use `X1` in the `socat` command when your host `DISPLAY` is `:1`; use `X0` when it is `:0`.
 
 ### Volumes
 

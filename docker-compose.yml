@@ -17,6 +17,9 @@ services:
       - ${FIREFOX_PROFILE_SRC:-/home/belal/snap/firefox/common/.mozilla/firefox/s3x8rw3t.default}:/host-firefox-profile:ro # host Firefox profile (read-only source for import)
     environment:
       - DISPLAY=${DISPLAY:-:1} # forward host display into container
+      # Optional X11 filesystem-socket proxy for tools such as wmctrl/xdotool.
+      # If direct DISPLAY fails, run the README socat proxy (host X1 -> container X99).
+      - AGENT_X11_DISPLAY=${AGENT_X11_DISPLAY:-:99}
     depends_on:
       - postgres
       - neo4j
@@ -39,6 +42,7 @@ services:
       - "3333:3333"
     volumes:
       - ${AGENT_WORKSPACE:-/home/agent_worker/workspace}:/home/agent_worker/workspace
+      - /tmp/.X11-unix:/tmp/.X11-unix # share host/proxy X11 socket for GNOME window fallback
     depends_on:
       - postgres
       - neo4j
@@ -46,6 +50,9 @@ services:
       - cognee
     env_file:
       - .env.local
+    environment:
+      - DISPLAY=${DISPLAY:-:1}
+      - AGENT_X11_DISPLAY=${AGENT_X11_DISPLAY:-:99}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

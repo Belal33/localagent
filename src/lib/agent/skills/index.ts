@@ -4,6 +4,7 @@ import { coreSkill } from "./core";
 import { filesystemSkill } from "./filesystem";
 import { camofoxSkill } from "./camofox";
 import { scrapingSkill } from "./scraping";
+import { gnomeSkill } from "./gnome";
 
 /**
  * ─── Skill Registry ─────────────────────────────────────────────────────────
@@ -34,7 +35,7 @@ export interface Skill {
 // ─── Skill Registry ─────────────────────────────────────────────────────────
 // Add more skills here as needed (e.g., coding, research, data analysis)
 
-const allSkills: Skill[] = [coreSkill, filesystemSkill, camofoxSkill, scrapingSkill];
+const allSkills: Skill[] = [coreSkill, filesystemSkill, camofoxSkill, scrapingSkill, gnomeSkill];
 
 // ─── Placeholder Tool Prefix ────────────────────────────────────────────────
 const PLACEHOLDER_PREFIX = "use_";

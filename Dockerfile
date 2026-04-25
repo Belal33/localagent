@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxi6 \
     libpango-1.0-0 \
     libcairo2 \
+    wmctrl \
+    xdotool \
+    x11-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD= npx camoufox fetch && chmod -R 755 /root/.cache/camoufox
 
