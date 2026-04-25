@@ -302,7 +302,7 @@ export default function SettingsPanel({
           <div className="bg-neutral-800/50 rounded-lg p-3 border border-neutral-700/40 space-y-1">
             <p className="text-xs text-neutral-400 font-semibold">OpenCode Go Plan</p>
             <p className="text-xs text-neutral-600 leading-relaxed">
-              10 models · $10/mo · Up to $60/mo usage · Changes apply to the next
+              14 models · $10/mo · Up to $60/mo usage · Changes apply to the next
               message.
             </p>
           </div>
