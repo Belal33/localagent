@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { Command } from "@langchain/langgraph";
 import { AIMessageChunk, AIMessage, ToolMessage } from "@langchain/core/messages";
 import { getAgentGraph } from "@/lib/agent/graph";
+import { extractWorkspaceScreenshotName, screenshotArtifactUrl } from "@/lib/agent/screenshot-artifacts";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -166,14 +167,27 @@ export async function POST(req: NextRequest) {
                                                 const output = typeof msg.content === "string"
                                                     ? msg.content
                                                     : JSON.stringify(msg.content);
+                                                const callId = msg.tool_call_id || "";
+                                                const toolName = msg.name || "unknown";
                                                 controller.enqueue(
                                                     ndjsonLine({
                                                         type: "tool_result",
-                                                        tool: msg.name || "unknown",
+                                                        tool: toolName,
                                                         output: output.slice(0, 2000),
-                                                        id: msg.tool_call_id || "",
+                                                        id: callId,
                                                     })
                                                 );
+                                                const screenshotName = extractWorkspaceScreenshotName(output);
+                                                if (screenshotName) {
+                                                    controller.enqueue(
+                                                        ndjsonLine({
+                                                            type: "screenshot",
+                                                            callId,
+                                                            name: screenshotName,
+                                                            url: screenshotArtifactUrl(screenshotName),
+                                                        })
+                                                    );
+                                                }
                                             }
                                         }
                                     }

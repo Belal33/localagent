@@ -1,6 +1,7 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { getPage } from "./shared";
+import { saveScreenshotArtifact } from "../../screenshot-artifacts";
 
 // ─── Page Interaction Tools ─────────────────────────────────────────────────
 
@@ -146,7 +147,7 @@ const screenshot = new DynamicStructuredTool({
     name: "camofox_screenshot",
     description:
         "Take a screenshot of the current page in a tab. " +
-        "Returns the screenshot as a base64 string.",
+        "Saves the screenshot into the shared workspace screenshots folder and returns the path.",
     schema: z.object({
         tabId: z.string().describe("The tab ID"),
         fullPage: z
@@ -160,8 +161,8 @@ const screenshot = new DynamicStructuredTool({
             if (!page) return `Tab ${tabId} not found.`;
 
             const buffer = await page.screenshot({ fullPage, type: "png" });
-            const base64 = buffer.toString("base64");
-            return `Screenshot captured (${base64.length} chars base64). URL: ${page.url()}`;
+            const artifact = await saveScreenshotArtifact(buffer, "camofox");
+            return `Screenshot captured for ${page.url()}\nScreenshot available for vision inspection: ${artifact.path}\nScreenshot available in client: ${artifact.url}`;
         } catch (error: any) {
             return `Failed to take screenshot: ${error.message}`;
         }

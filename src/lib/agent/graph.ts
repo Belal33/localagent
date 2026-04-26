@@ -4,9 +4,14 @@ import {
   END,
 } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { ChatOpenAI } from "@langchain/openai";
-import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+import { ChatOpenAI, ChatOpenAICompletions } from "@langchain/openai";
+import { SystemMessage, AIMessage, ToolMessage, HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
+import type { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
+import type { ChatResult } from "@langchain/core/outputs";
+import { readFile } from "node:fs/promises";
+import type { OpenAI } from "openai";
+import { extractWorkspaceScreenshotPath, mimeTypeForImage } from "./screenshot-artifacts";
 
 import {
   getToolsForState,
@@ -24,16 +29,90 @@ import { getCheckpointer } from "@/lib/memory/db";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
+const DEEPSEEK_MODELS = new Set(["deepseek-v4-pro", "deepseek-v4-flash"]);
+const DEFAULT_CHAT_MODEL = "mimo-v2-pro";
+const DEFAULT_VISION_MODEL = "mimo-v2-omni";
+const MULTIMODAL_MODELS = new Set(["mimo-v2.5", "mimo-v2-omni"]);
 
 // ─── LLM via OpenCode Zen (OpenAI-compatible) — lazily initialized ──────────
 let _llm: ChatOpenAI | null = null;
-let _llmModel = "mimo-v2-pro";
+let _llmModel = DEFAULT_CHAT_MODEL;
+
+class DeepSeekChatOpenAICompletions extends ChatOpenAICompletions {
+  private activeMessages: BaseMessage[] = [];
+
+  async _generate(
+    messages: BaseMessage[],
+    options: this["ParsedCallOptions"],
+    runManager?: CallbackManagerForLLMRun
+  ): Promise<ChatResult> {
+    this.activeMessages = messages;
+    try {
+      return await super._generate(messages, options, runManager);
+    } finally {
+      this.activeMessages = [];
+    }
+  }
+
+  async *_streamResponseChunks(
+    messages: BaseMessage[],
+    options: this["ParsedCallOptions"],
+    runManager?: CallbackManagerForLLMRun
+  ): ReturnType<ChatOpenAICompletions["_streamResponseChunks"]> {
+    this.activeMessages = messages;
+    try {
+      return yield* super._streamResponseChunks(messages, options, runManager);
+    } finally {
+      this.activeMessages = [];
+    }
+  }
+
+  completionWithRetry(
+    request: OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+    requestOptions?: OpenAI.RequestOptions
+  ): Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>>;
+  completionWithRetry(
+    request: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+    requestOptions?: OpenAI.RequestOptions
+  ): Promise<OpenAI.Chat.Completions.ChatCompletion>;
+  async completionWithRetry(
+    request:
+      | OpenAI.Chat.ChatCompletionCreateParamsStreaming
+      | OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+    requestOptions?: OpenAI.RequestOptions
+  ): Promise<
+    | AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+    | OpenAI.Chat.Completions.ChatCompletion
+  > {
+    this.attachReasoningContent(request as unknown as Record<string, unknown>);
+    return super.completionWithRetry(request as never, requestOptions as never);
+  }
+
+  private attachReasoningContent(request: Record<string, unknown>) {
+    if (!Array.isArray(request.messages)) return;
+
+    const sourceAssistantMessages = this.activeMessages.filter(
+      (message): message is AIMessage => AIMessage.isInstance(message)
+    );
+    const outboundAssistantMessages = request.messages.filter(
+      (message): message is Record<string, unknown> =>
+        typeof message === "object" && message !== null && message.role === "assistant"
+    );
+
+    for (let i = 0; i < outboundAssistantMessages.length; i += 1) {
+      const reasoningContent = sourceAssistantMessages[i]?.additional_kwargs?.reasoning_content;
+      if (typeof reasoningContent === "string" && reasoningContent.length > 0) {
+        outboundAssistantMessages[i].reasoning_content = reasoningContent;
+      }
+    }
+  }
+}
 
 export function getLLM(model?: string): ChatOpenAI {
   const targetModel = model || _llmModel;
   if (!_llm || targetModel !== _llmModel) {
     _llmModel = targetModel;
-    _llm = new ChatOpenAI({
+    const fields = {
       model: targetModel,
       maxTokens: 64000,
       temperature: 0.1,
@@ -41,9 +120,30 @@ export function getLLM(model?: string): ChatOpenAI {
         apiKey: process.env.OPENCODE_API_KEY,
         baseURL: OPENCODE_BASE_URL,
       },
+    };
+    const llm = new ChatOpenAI({
+      ...fields,
+      ...(DEEPSEEK_MODELS.has(targetModel)
+        ? { completions: new DeepSeekChatOpenAICompletions(fields) }
+        : {}),
     });
+    _llm = llm;
   }
   return _llm;
+}
+
+function isMultimodalModel(model?: string): boolean {
+  return !!model && MULTIMODAL_MODELS.has(model);
+}
+
+function messageHasImageContent(message: BaseMessage): boolean {
+  if (!Array.isArray(message.content)) return false;
+  return message.content.some((block) => (
+    typeof block === "object" &&
+    block !== null &&
+    "type" in block &&
+    block.type === "image_url"
+  ));
 }
 
 // ─── Register ALL possible tools (for ToolNode execution) ───────────────────
@@ -77,7 +177,11 @@ const GraphAnnotation = Annotation.Root({
 // ─── Agent Node (dynamic tool binding based on active skills) ───────────────
 async function callModel(state: typeof GraphAnnotation.State, config: RunnableConfig) {
   const { messages, activeSkills, memoryContextText, plan, currentStep, pastSteps } = state;
-  const chatModel = (config?.configurable as Record<string, string> | undefined)?.chatModel;
+  const requestedChatModel = (config?.configurable as Record<string, string> | undefined)?.chatModel;
+  const hasScreenshotImage = messages.some(messageHasImageContent);
+  const chatModel = hasScreenshotImage && !isMultimodalModel(requestedChatModel)
+    ? DEFAULT_VISION_MODEL
+    : requestedChatModel;
   const currentTools = getToolsForState(activeSkills);
   const llmWithTools = getLLM(chatModel).bindTools(currentTools);
 
@@ -115,6 +219,15 @@ async function callModel(state: typeof GraphAnnotation.State, config: RunnableCo
     );
   }
 
+  if (hasScreenshotImage) {
+    parts.push(
+      `[SCREENSHOT IMAGE ATTACHED]\n` +
+      `A screenshot image has been attached as an image_url content block in the conversation. ` +
+      `Inspect the attached image directly. Do not use read_file on PNG/JPEG/WebP screenshots; binary image files are not useful as text. ` +
+      `If the user asked what is on screen, answer from the attached image unless additional non-visual details are required.`
+    );
+  }
+
   const systemContent = parts.join("\n\n");
   const systemMsg = new SystemMessage(systemContent);
 
@@ -124,7 +237,7 @@ async function callModel(state: typeof GraphAnnotation.State, config: RunnableCo
     (m) => !(m._getType() === "system" && typeof m.content === "string" && m.content.includes("[MEMORY CONTEXT"))
   );
 
-  console.log(`[Agent] Invoking model with ${currentTools.length} tools, ${conversationMessages.length} msgs, systemPrompt=${systemContent.length} chars${currentStep ? `, step="${currentStep.slice(0, 60)}"` : ''}`);
+  console.log(`[Agent] Invoking model ${chatModel || DEFAULT_CHAT_MODEL}${hasScreenshotImage ? " (vision)" : ""} with ${currentTools.length} tools, ${conversationMessages.length} msgs, systemPrompt=${systemContent.length} chars${currentStep ? `, step="${currentStep.slice(0, 60)}"` : ''}`);
 
   // Try with tools first; fall back to no-tools if model returns empty
   // (minimax-m2.7 via OpenCode doesn't support OpenAI function calling)
@@ -186,6 +299,63 @@ async function callModel(state: typeof GraphAnnotation.State, config: RunnableCo
 
 const toolNode = new ToolNode(allTools);
 
+type MultimodalToolContent = Array<
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+>;
+
+async function appendScreenshotImageMessages(
+  toolCalls: NonNullable<AIMessage["tool_calls"]>,
+  messages: ToolMessage[]
+): Promise<BaseMessage[]> {
+  const toolCallIds = new Set(
+    toolCalls.map((tc) => tc.id).filter((id): id is string => typeof id === "string")
+  );
+
+  if (toolCallIds.size === 0) return messages;
+
+  const output: BaseMessage[] = [...messages];
+
+  for (const message of messages) {
+    if (!toolCallIds.has(message.tool_call_id)) continue;
+    if (typeof message.content !== "string") continue;
+
+    const imagePath = extractWorkspaceScreenshotPath(message.content);
+    if (!imagePath) continue;
+
+    try {
+      const buffer = await readFile(imagePath);
+      const mimeType = mimeTypeForImage(imagePath);
+      if (!mimeType) continue;
+      const content: MultimodalToolContent = [
+        {
+          type: "text",
+          text: "Inspect this screenshot image and use it to answer the user's request about what is on screen.",
+        },
+        {
+          type: "image_url",
+          image_url: { url: `data:${mimeType};base64,${buffer.toString("base64")}` },
+        },
+      ];
+
+      output.push(new HumanMessage({ content }));
+    } catch (error) {
+      output.push(
+        new ToolMessage({
+          content: `${message.content}\n\nCould not attach screenshot image for vision: ${error instanceof Error ? error.message : String(error)}`,
+          tool_call_id: message.tool_call_id,
+          name: message.name,
+          status: message.status,
+          artifact: message.artifact,
+          metadata: message.metadata,
+        })
+      );
+    }
+  }
+
+  return output;
+}
+
 async function toolsWithActivation(state: typeof GraphAnnotation.State) {
   const lastMsg = state.messages[state.messages.length - 1] as AIMessage;
   const toolCalls = lastMsg.tool_calls ?? [];
@@ -210,18 +380,25 @@ async function toolsWithActivation(state: typeof GraphAnnotation.State) {
     throw err;
   }
 
-  const resultMsgs = (result as { messages?: ToolMessage[] })?.messages ?? [];
+  const resultMsgs = await appendScreenshotImageMessages(
+    toolCalls,
+    (result as { messages?: ToolMessage[] })?.messages ?? []
+  );
   console.log(`[Tools] ◀ EXIT — produced ${resultMsgs.length} ToolMessage(s), activatedSkills=[${activatedSkills.join(",")}]`);
 
   // If any skills were activated, update state
   if (activatedSkills.length > 0) {
     return {
       ...result,
+      messages: resultMsgs,
       activeSkills: activatedSkills,
     };
   }
 
-  return result;
+  return {
+    ...result,
+    messages: resultMsgs,
+  };
 }
 
 // ─── Conditional Routing: After Agent ───────────────────────────────────────

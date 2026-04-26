@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { getAgentGraph } from "@/lib/agent/graph";
 import { distillConversation } from "@/lib/memory/distiller";
+import { extractWorkspaceScreenshotName, screenshotArtifactUrl } from "@/lib/agent/screenshot-artifacts";
 
 // Allow longer execution times for local inference + tool execution
 export const dynamic = "force-dynamic";
@@ -14,6 +15,7 @@ export const maxDuration = 120;
 // { type: "step_status", step: "...", status: "..." }             — step progress
 // { type: "tool_call",   tool: "...", args: {...}, id: "..." }    — agent invokes a tool
 // { type: "tool_result", tool: "...", output: "...", id: "..." }  — tool execution result
+// { type: "screenshot",  callId: "...", name: "...", url: "..." } — screenshot attachment for a tool_call
 // { type: "node_start",  node: "..." }                            — graph node transition
 // { type: "memory",      memories: [...] }                        — retrieved memory chunks
 // { type: "done" }                                                — stream complete
@@ -147,16 +149,28 @@ export async function POST(req: NextRequest) {
                             const output = typeof data.output?.content === "string"
                                 ? data.output.content
                                 : JSON.stringify(data.output?.content ?? data.output);
+                            const toolName = data.output?.name || "unknown";
+                            const callId = data.output?.tool_call_id || "";
                             controller.enqueue(
                                 ndjsonLine({
                                     type: "tool_result",
-                                    tool: (metadata as any)?.langgraph_node === "tools"
-                                        ? (data.output?.name || "unknown")
-                                        : "unknown",
+                                    tool: toolName,
                                     output: output.slice(0, 2000),
-                                    id: data.output?.tool_call_id || "",
+                                    id: callId,
                                 })
                             );
+
+                            const screenshotName = extractWorkspaceScreenshotName(output);
+                            if (screenshotName) {
+                                controller.enqueue(
+                                    ndjsonLine({
+                                        type: "screenshot",
+                                        callId,
+                                        name: screenshotName,
+                                        url: screenshotArtifactUrl(screenshotName),
+                                    })
+                                );
+                            }
                         }
 
                         // ─── Node Transitions (deduplicated) ────────────

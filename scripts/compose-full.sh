@@ -7,6 +7,8 @@ GNOME_MCP_BIN="${GNOME_MCP_BIN:-$HOME/.cargo/bin/gnome-mcp-server}"
 GNOME_MCP_PORT="${GNOME_MCP_PORT:-8930}"
 X11_PROXY_DISPLAY="${AGENT_X11_DISPLAY:-:99}"
 HOST_DISPLAY="${DISPLAY:-:1}"
+HOST_PICTURES_DIR="${HOST_PICTURES_DIR:-$HOME/Pictures}"
+HOST_WORKSPACE_DIR="${AGENT_WORKSPACE:-/home/agent_worker/workspace}"
 
 if [[ "$#" -gt 0 ]]; then
   shift
@@ -140,6 +142,85 @@ check_unsafe_mode() {
   echo "  Alt+F2 -> lg -> global.context.unsafe_mode = true"
 }
 
+start_screenshot_sync() {
+  require_command node
+
+  local screenshot_dir="$HOST_WORKSPACE_DIR/screenshots"
+  mkdir -p "$screenshot_dir"
+  if [[ ! -w "$screenshot_dir" ]]; then
+    chmod u+rwx "$screenshot_dir" 2>/dev/null || true
+  fi
+  if [[ ! -w "$screenshot_dir" ]] && rmdir "$screenshot_dir" 2>/dev/null; then
+    mkdir -p "$screenshot_dir"
+  fi
+  if [[ ! -w "$screenshot_dir" ]]; then
+    echo "Screenshot sync directory is not writable: $screenshot_dir" >&2
+    echo "Fix ownership with: sudo chown -R $(id -un):$(id -gn) '$screenshot_dir'" >&2
+    exit 1
+  fi
+
+  echo "Starting screenshot sync $HOST_PICTURES_DIR -> $screenshot_dir"
+  HOST_PICTURES_DIR="$HOST_PICTURES_DIR" \
+    HOST_WORKSPACE_DIR="$HOST_WORKSPACE_DIR" \
+    nohup node - <<'NODE' >/tmp/localagnent-screenshot-sync.log 2>&1 &
+const fs = require('node:fs');
+const path = require('node:path');
+
+const sourceRoot = process.env.HOST_PICTURES_DIR;
+const workspaceDir = path.join(process.env.HOST_WORKSPACE_DIR, 'screenshots');
+const copied = new Set();
+
+function isImage(name) {
+  return /\.(png|jpe?g|webp)$/i.test(name);
+}
+
+function copyIfReady(sourceDir, name) {
+  if (!sourceDir || !isImage(name)) return;
+  const source = path.join(sourceDir, name);
+  const target = path.join(workspaceDir, name);
+  fs.stat(source, (statErr, firstStat) => {
+    if (statErr || !firstStat.isFile()) return;
+    setTimeout(() => {
+      fs.stat(source, (secondErr, secondStat) => {
+        if (secondErr || !secondStat.isFile()) return;
+        if (firstStat.size !== secondStat.size) return copyIfReady(sourceDir, name);
+        const key = `${name}:${secondStat.mtimeMs}:${secondStat.size}`;
+        if (copied.has(key)) return;
+        fs.copyFile(source, target, (copyErr) => {
+          if (copyErr) {
+            console.error(`copy failed ${source} -> ${target}:`, copyErr.message);
+            return;
+          }
+          copied.add(key);
+          console.log(`copied ${source} -> ${target}`);
+        });
+      });
+    }, 300);
+  });
+}
+
+fs.mkdirSync(workspaceDir, { recursive: true });
+const sourceDirs = [sourceRoot, path.join(sourceRoot, 'Screenshots')].filter((dir, index, arr) => (
+  dir && arr.indexOf(dir) === index && fs.existsSync(dir) && fs.statSync(dir).isDirectory()
+));
+
+for (const sourceDir of sourceDirs) {
+  for (const name of fs.readdirSync(sourceDir).filter(isImage)) {
+    copyIfReady(sourceDir, name);
+  }
+  fs.watch(sourceDir, (_event, name) => {
+    if (typeof name === 'string') copyIfReady(sourceDir, name);
+  });
+}
+setInterval(() => {}, 60_000);
+NODE
+
+  local pid=$!
+  local pid_file=/tmp/localagnent-screenshot-sync.pid
+  echo "$pid" >"$pid_file"
+  pid_files+=("$pid_file")
+}
+
 main() {
   require_command docker
   require_command node
@@ -148,6 +229,7 @@ main() {
     dev|prod)
       start_gnome_bridge
       start_x11_proxy
+      start_screenshot_sync
       check_unsafe_mode
       ;;
     infra)

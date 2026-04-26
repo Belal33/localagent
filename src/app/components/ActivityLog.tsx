@@ -26,6 +26,9 @@ export interface ActivityItem {
     output?: string;
     // node_start
     node?: string;
+    // screenshot attachment (set on the matching tool_call)
+    screenshotUrl?: string;
+    screenshotName?: string;
 }
 
 interface ActivityLogProps {
@@ -166,6 +169,27 @@ export default function ActivityLog({ items }: ActivityLogProps) {
                                                     </pre>
                                                 </div>
                                             )}
+                                            {item.screenshotUrl && (
+                                                <div>
+                                                    <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider">
+                                                        Screenshot
+                                                    </span>
+                                                    <a
+                                                        href={item.screenshotUrl}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="block mt-0.5 rounded-lg overflow-hidden border border-neutral-800 hover:border-neutral-600 transition-colors bg-neutral-950/80"
+                                                        title={item.screenshotName || "Open screenshot"}
+                                                    >
+                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                        <img
+                                                            src={item.screenshotUrl}
+                                                            alt={item.screenshotName || "screenshot"}
+                                                            className="max-h-64 w-auto block"
+                                                        />
+                                                    </a>
+                                                </div>
+                                            )}
                                             {/* Show matching result if exists */}
                                             {items
                                                 .filter(
@@ -212,10 +236,28 @@ export default function ActivityLog({ items }: ActivityLogProps) {
                                         </span>
                                     </button>
                                     {isExpanded && (
-                                        <pre className="ml-7 mr-2 mb-1 text-[11px] text-emerald-400/80 bg-neutral-950/80 rounded-lg p-2 
-                                            overflow-x-auto max-h-48 font-mono whitespace-pre-wrap animate-fade-in">
-                                            {item.output}
-                                        </pre>
+                                        <div className="ml-7 mr-2 mb-1 space-y-1 animate-fade-in">
+                                            {item.screenshotUrl && (
+                                                <a
+                                                    href={item.screenshotUrl}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="block rounded-lg overflow-hidden border border-neutral-800 hover:border-neutral-600 transition-colors bg-neutral-950/80"
+                                                    title={item.screenshotName || "Open screenshot"}
+                                                >
+                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                    <img
+                                                        src={item.screenshotUrl}
+                                                        alt={item.screenshotName || "screenshot"}
+                                                        className="max-h-64 w-auto block"
+                                                    />
+                                                </a>
+                                            )}
+                                            <pre className="text-[11px] text-emerald-400/80 bg-neutral-950/80 rounded-lg p-2 
+                                                overflow-x-auto max-h-48 font-mono whitespace-pre-wrap">
+                                                {item.output}
+                                            </pre>
+                                        </div>
                                     )}
                                 </div>
                             );

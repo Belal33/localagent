@@ -42,6 +42,7 @@ type StreamEvent =
   | { type: "step_status"; step: string; status: string }
   | { type: "tool_call"; tool: string; args: Record<string, unknown>; id: string }
   | { type: "tool_result"; tool: string; output: string; id: string }
+  | { type: "screenshot"; callId: string; name: string; url: string }
   | { type: "node_start"; node: string }
   | { type: "memory"; memories: MemoryItem[]; episodes: EpisodicMemory[]; contextText: string }
   | { type: "done" }
@@ -233,6 +234,16 @@ export default function AgentInterface() {
                 callId: event.id,
               },
             ]);
+            break;
+
+          case "screenshot":
+            setActivityItems((prev) =>
+              prev.map((item) =>
+                item.callId === event.callId
+                  ? { ...item, screenshotUrl: event.url, screenshotName: event.name }
+                  : item
+              )
+            );
             break;
 
           case "node_start":

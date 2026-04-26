@@ -190,6 +190,12 @@ GNOME_MCP_URL=http://host.docker.internal:8930/mcp
 
 The default is already `http://host.docker.internal:8930/mcp`, so no environment variable is needed if you use the command above.
 
+GNOME screenshots are saved by the host portal under your host Pictures directory. The `npm run dev:full` and `npm run prod:full` launchers start a host-side screenshot sync helper that copies new images from `${HOST_PICTURES_DIR:-$HOME/Pictures}` into the already-mounted workspace directory at `${AGENT_WORKSPACE:-/home/agent_worker/workspace}/screenshots`. Inside the app, those files appear under `${WORKSPACE_ROOT:-/home/agent_worker/workspace}/screenshots` so vision-capable models can inspect them on the next turn. If your screenshots are saved somewhere else, set:
+
+```env
+HOST_PICTURES_DIR=/path/to/your/Pictures
+```
+
 Some window-management actions use GNOME Shell `Eval` and require GNOME Shell unsafe mode. Enable it from Looking Glass with `Alt+F2`, enter `lg`, then run:
 
 ```js
