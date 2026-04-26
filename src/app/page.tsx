@@ -7,7 +7,7 @@ import ApprovalCard from "./components/ApprovalCard";
 import PlanDisplay from "./components/PlanDisplay";
 import ActivityLog, { type ActivityItem } from "./components/ActivityLog";
 import MemoryContext, { type MemoryItem, type EpisodicMemory } from "./components/MemoryContext";
-import SettingsPanel, { type ModelSettings, DEFAULT_SETTINGS, GO_MODELS } from "./components/SettingsPanel";
+import SettingsPanel, { type AgentSettings, type AgentSettingsPayload, type ModelSettings, DEFAULT_SETTINGS, GO_MODELS } from "./components/SettingsPanel";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -117,6 +117,9 @@ export default function AgentInterface() {
   const SETTINGS_STORAGE_KEY = "localagent.modelSettings.v1";
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(DEFAULT_SETTINGS);
+  const [agentSettings, setAgentSettings] = useState<AgentSettingsPayload | null>(null);
+  const [agentSettingsLoading, setAgentSettingsLoading] = useState(false);
+  const [agentSettingsError, setAgentSettingsError] = useState<string | null>(null);
 
   // Hydrate from localStorage on mount (client-only to avoid SSR mismatch)
   useEffect(() => {
@@ -153,6 +156,37 @@ export default function AgentInterface() {
       // storage quota / disabled — non-fatal
     }
   }, [modelSettings]);
+
+  const refreshAgentSettings = useCallback(async () => {
+    setAgentSettingsLoading(true);
+    setAgentSettingsError(null);
+    try {
+      const res = await fetch("/api/agent-settings", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setAgentSettings(await res.json());
+    } catch (error) {
+      setAgentSettingsError(error instanceof Error ? error.message : "Failed to load agent settings");
+    } finally {
+      setAgentSettingsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshAgentSettings();
+  }, [refreshAgentSettings]);
+
+  const saveAgentSettings = useCallback(async (settings: AgentSettings) => {
+    const res = await fetch("/api/agent-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null) as { error?: string } | null;
+      throw new Error(body?.error || `HTTP ${res.status}`);
+    }
+    setAgentSettings(await res.json());
+  }, []);
 
   // Auto-scroll
   useEffect(() => {
@@ -616,8 +650,13 @@ export default function AgentInterface() {
       <SettingsPanel
         isOpen={settingsOpen}
         settings={modelSettings}
+        agentSettings={agentSettings}
+        agentSettingsLoading={agentSettingsLoading}
+        agentSettingsError={agentSettingsError}
         onClose={() => setSettingsOpen(false)}
         onSave={(s) => setModelSettings(s)}
+        onAgentSettingsSave={saveAgentSettings}
+        onAgentSettingsRefresh={refreshAgentSettings}
       />
     </div>
   );

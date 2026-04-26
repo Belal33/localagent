@@ -1,40 +1,36 @@
 # Local AI Agent
 
-An autonomous AI agent running natively in a **Docker container** with sandboxed tool execution. Built with **Next.js**, **LangGraph.js**, and the **Anthropic SDK** (via a local proxy), featuring a Plan-and-Execute cognitive architecture with hybrid memory (PostgreSQL + Neo4j).
+An autonomous AI agent with a host-native **Next.js control plane** and a Docker-backed sandbox for terminal execution. Built with **Next.js**, **LangGraph.js**, and the **Anthropic SDK** (via a local proxy), featuring a Plan-and-Execute cognitive architecture with hybrid memory (PostgreSQL + Neo4j).
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                    Chat UI (Next.js)                  │
-├──────────────────────────────────────────────────────┤
-│        API Route → LangGraph Plan-and-Execute         │
-│  memoryRetrieval → classifier → planner → executor    │
-│              ┌────────┐     ┌────────┐               │
-│              │ Agent  │ ⇄   │ Tools  │ → END         │
-│              └────────┘     └────────┘               │
-│                               │                       │
-│              ┌────────────────┴───────────────┐      │
-│              │    Skills (containerized)       │      │
-│              ├─────────────┬──────────────────┤      │
-│              │ filesystem  │ terminal         │      │
-│              │ web-search  │ download         │      │
-│              └─────────────┴──────────────────┘      │
-├──────────────────────────────────────────────────────┤
-│              Hybrid Memory System                     │
-│    PostgreSQL (pgvector)  │  Neo4j (Knowledge Graph) │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ Host: Next.js Chat UI + API Routes                            │
+│ LangGraph: memoryRetrieval → classifier → planner → executor  │
+│                                                              │
+│ Tools                                                        │
+│ - execute_command       → Docker sandbox: agent_app:/workspace│
+│ - host_execute_command  → host shell, always HITL-approved    │
+│ - GNOME MCP             → host stdio desktop control          │
+│ - filesystem            → WORKSPACE_ROOT only                 │
+│ - web/search/download/browser/scraping                        │
+└──────────────────────────────────────────────────────────────┘
+                 │
+                 ├── Docker infra: Postgres, Neo4j, Cognee, Scrapling
+                 └── Docker sandbox: agent_app
 ```
 
-**Tools**: `read_file`, `write_file`, `list_directory`, `delete_file`, `execute_command`, `web_search`, `download_file`
+**Tools**: `read_file`, `write_file`, `list_directory`, `delete_file`, `execute_command`, `host_execute_command`, `sandbox_status`, `restart_sandbox`, `web_search`, `download_file`, GNOME desktop tools.
 
-The entire app runs inside a Docker container. The container itself is the sandbox — no OS-level user configuration required.
+The app normally runs on the host with `npm run dev` or `npm start`. The `agent_app` container is the sandboxed terminal/runtime environment attached to the shared workspace.
 
 ---
 
 ## Prerequisites
 
 - **Docker** & **Docker Compose** (v2)
+- **Node.js 22+**
 - **LLM Provider** — an Anthropic-compatible API proxy running on the host (e.g., on port `8080`)
 - **Ollama** — running on the host with `mxbai-embed-large:latest` pulled (for embeddings)
 
@@ -54,31 +50,45 @@ cd localagnent
 Edit `.env.local` with your settings:
 
 ```env
-# Host services (these run on YOUR machine, not in Docker)
-ANTHROPIC_PROXY_URL=http://host.docker.internal:8080
-AGENT_OLLAMA_URL=http://host.docker.internal:11434
+# Host services
+AGENT_OLLAMA_URL=http://localhost:11434
 
-# In-container services (Docker networking handles these)
-AGENT_PG_URI=postgresql://agent:agent_local_dev@postgres:5432/agent_memory
-AGENT_NEO4J_URI=bolt://neo4j:7687
+# Docker infrastructure published to host ports
+AGENT_PG_URI=postgresql://agent:agent_local_dev@localhost:5432/agent_memory
+AGENT_NEO4J_URI=bolt://localhost:7687
+COGNEE_URL=http://localhost:8001
 
-# Agent workspace (mounted as a volume)
-WORKSPACE_ROOT=/workspace
+# Shared host workspace mounted into agent_app at /workspace
+WORKSPACE_ROOT=./workspace
+AGENT_WORKSPACE=./workspace
+AGENT_RUNTIME_CONTAINER=agent_app
+AGENT_RUNTIME_WORKSPACE=/workspace
 ```
 
 ### 3. Start the Agent
 
-**Full development stack** (recommended: app + Docker services + GNOME MCP bridge + X11 proxy):
+**Start infrastructure + sandbox container:**
 ```bash
 npm run dev:full
 ```
 
-**Full production stack** (built app + Docker services + GNOME MCP bridge + X11 proxy):
+In another terminal, run the host app:
+```bash
+npm run dev
+```
+
+For production:
+```bash
+npm run build
+npm start
+```
+
+To rebuild the sandbox/runtime image while starting services:
 ```bash
 npm run prod:full
 ```
 
-**Infrastructure only** (Postgres + Neo4j + Scrapling MCP + Cognee):
+**Infrastructure + sandbox only:**
 ```bash
 npm run infra:full
 ```
@@ -88,44 +98,58 @@ Pass Docker Compose flags after `--` when needed:
 npm run dev:full -- --build
 ```
 
-**Development** (hot reload, source code mounted):
+**Docker-only app mode** is still available for deployment/debugging:
 ```bash
-docker compose --profile dev up
+docker compose --profile app up app-dev
 ```
 
-**Production** (built image):
+**Docker-only production app mode:**
 ```bash
-docker compose --profile prod up --build
+docker compose --profile app up --build app-prod
 ```
 
-**Infrastructure only** (no app):
+**Infrastructure only without the host app:**
 ```bash
-docker compose up
+docker compose up agent_app postgres neo4j scrapling-mcp cognee
 ```
 
 ### 4. Rebuild the Agent Container
 
-If you need to rebuild the agent container (e.g., after changing `Dockerfile` or `package.json`):
+If you need to rebuild the sandbox container (e.g., after changing `Dockerfile` or package dependencies):
 
 **Option 1: Stop and rebuild all services**
 Stop the currently running `docker compose` process (`Ctrl+C`), then run:
 ```bash
-docker compose --profile dev up --build
+docker compose up --build agent_app postgres neo4j scrapling-mcp cognee
 ```
 
-**Option 2: Rebuild only the app container (keeps DB/infrastructure running)**
+**Option 2: Rebuild only the sandbox container (keeps DB/infrastructure running)**
 ```bash
-docker compose --profile dev up --build -d app-dev
+docker compose up --build -d agent_app
 ```
 
 **Option 3: Build the image only without starting**
 ```bash
-docker compose --profile dev build app-dev
+docker compose build agent_app
 ```
 
 Open [http://localhost:3333](http://localhost:3333) in your browser.
 
 > **Note**: Use `--build` only the first time or after changing `Dockerfile` / `package.json`. Subsequent runs can omit it.
+
+### 5. Migrating From The Old Containerized App
+
+If `npm run dev` fails with a Next.js lockfile or permission error, old generated files may be owned by `root` from the previous Docker app mode. Fix only the generated/runtime folders:
+
+```bash
+sudo chown -R "$USER:$USER" .next workspace
+```
+
+Or remove the generated Next cache and let Next rebuild it:
+
+```bash
+sudo rm -rf .next
+```
 
 ---
 
@@ -133,36 +157,37 @@ Open [http://localhost:3333](http://localhost:3333) in your browser.
 
 | Service | Profile | Description |
 |---------|---------|-------------|
-| `app-dev` | `dev` | Next.js dev server with hot reload, source mounted as volume |
-| `app-prod` | `prod` | Next.js production build, code baked into image |
+| `agent_app` | *(always)* | Persistent sandbox runtime for agent terminal commands |
+| `app-dev` | `app` | Optional Docker-only Next.js dev server |
+| `app-prod` | `app` | Optional Docker-only Next.js production server |
 | `postgres` | *(always)* | PostgreSQL 16 + pgvector for episodic memory & checkpointing |
 | `neo4j` | *(always)* | Neo4j 5 Community for semantic knowledge graph |
+| `cognee` | *(always)* | Long-term semantic memory service, exposed on host port `8001` |
+| `scrapling-mcp` | *(always)* | HTTP MCP scraping service, exposed on host port `8931` |
 
 ### Host Service Access
 
-Services running on your host machine (Ollama, Anthropic proxy) are accessible from the container via `host.docker.internal`. This is configured automatically via `extra_hosts` in `docker-compose.yml`.
+The host app connects to Docker services via published `localhost` ports: Postgres `5432`, Neo4j `7687`, Cognee `8001`, and Scrapling MCP `8931`. Docker-only app mode still uses Docker service names such as `postgres`, `neo4j`, and `cognee` internally.
+
+### Memory Services
+
+Memory is split across multiple stores:
+
+| Store | Purpose | Host URL / Port |
+|-------|---------|-----------------|
+| Postgres + pgvector | LangGraph checkpoints and episodic summaries | `localhost:5432` |
+| Neo4j | Knowledge graph | `bolt://localhost:7687` |
+| Cognee | Semantic fact/chunk memory | `http://localhost:8001` |
+
+Cognee data is persisted in the `localagnent_cogneedata` Docker volume, while Postgres and Neo4j use `localagnent_pgdata` and `localagnent_neo4jdata`. Do not run `docker compose down -v` unless you intentionally want to delete persisted memory.
 
 ### GNOME Desktop Skill
 
 The `gnome` skill exposes Ubuntu/GNOME desktop controls to the agent after it calls `use_gnome`. It can send desktop notifications, launch apps, open files/URLs, set wallpaper, adjust volume, control media playback, toggle quick settings, take screenshots, manage windows, and use GNOME Keyring.
 
-Because the agent runs in Docker, the upstream `gnome-mcp-server` must run on the host GNOME session and be exposed through an HTTP MCP bridge.
+Because the app normally runs on the host, the upstream `gnome-mcp-server` is launched directly over stdio from the host GNOME session.
 
-The recommended startup command handles the host bridge and X11 proxy automatically:
-
-```bash
-npm run dev:full
-```
-
-For production mode, use:
-
-```bash
-npm run prod:full
-```
-
-The manual setup below is useful for debugging or running the pieces separately.
-
-1. Install the upstream MCP server on the host:
+Install the upstream MCP server on the host:
 
 ```bash
 git clone https://github.com/bilelmoussaoui/gnome-mcp-server.git /tmp/gnome-mcp-server
@@ -170,27 +195,19 @@ cd /tmp/gnome-mcp-server
 cargo install --path .
 ```
 
-2. Install a stdio-to-Streamable HTTP MCP bridge on the host, for example `supergateway`:
+The default command is `$HOME/.cargo/bin/gnome-mcp-server`. Override it when needed:
 
-```bash
-npm install -g supergateway
+```env
+GNOME_MCP_COMMAND=/custom/path/gnome-mcp-server
 ```
 
-3. Start the host bridge:
-
-```bash
-supergateway --stdio "$HOME/.cargo/bin/gnome-mcp-server" --outputTransport streamableHttp --port 8930
-```
-
-4. Configure the app container if you use a non-default URL:
+Docker-only app mode can still use an HTTP bridge. Configure it with:
 
 ```env
 GNOME_MCP_URL=http://host.docker.internal:8930/mcp
 ```
 
-The default is already `http://host.docker.internal:8930/mcp`, so no environment variable is needed if you use the command above.
-
-GNOME screenshots are saved by the host portal under your host Pictures directory. The `npm run dev:full` and `npm run prod:full` launchers start a host-side screenshot sync helper that copies new images from `${HOST_PICTURES_DIR:-$HOME/Pictures}` into the already-mounted workspace directory at `${AGENT_WORKSPACE:-/home/agent_worker/workspace}/screenshots`. Inside the app, those files appear under `${WORKSPACE_ROOT:-/home/agent_worker/workspace}/screenshots` so vision-capable models can inspect them on the next turn. If your screenshots are saved somewhere else, set:
+GNOME screenshots are read directly from the host screenshot path returned by `gnome-mcp-server`. The screenshot preview API allows files under `$HOME/Pictures`, `$HOME/Pictures/Screenshots`, `${HOST_PICTURES_DIR}` if configured, and workspace screenshot artifacts. If your screenshots are saved somewhere else, set:
 
 ```env
 HOST_PICTURES_DIR=/path/to/your/Pictures
@@ -202,31 +219,15 @@ Some window-management actions use GNOME Shell `Eval` and require GNOME Shell un
 global.context.unsafe_mode = true
 ```
 
-The `npm run dev:full` and `npm run prod:full` launchers check unsafe mode at startup and print a warning if it is disabled. They do not enable unsafe mode automatically because it allows arbitrary JavaScript evaluation inside GNOME Shell. Basic X11 window operations still use the fallback path when unsafe mode is off.
+The `npm run dev:full` and `npm run prod:full` launchers check unsafe mode at startup and print a warning if it is disabled. They do not enable unsafe mode automatically because it allows arbitrary JavaScript evaluation inside GNOME Shell. Basic X11 window operations still use the host fallback path when unsafe mode is off.
 
-On X11 sessions, the app also includes a fallback path using `wmctrl`, `xdotool`, and `x11-utils` for common window-management actions if unsafe mode is not enabled. Rebuild the app image after Dockerfile changes so those tools are available in the container.
-
-If X11 tools inside Docker report `Cannot open display`, your X server may only accept connections through the host's abstract Unix socket, which a bind-mounted `/tmp/.X11-unix` does not expose. Start a host-side filesystem-socket proxy and point the app at it:
-
-```bash
-rm -f /tmp/.X11-unix/X99
-socat UNIX-LISTEN:/tmp/.X11-unix/X99,fork,mode=777 ABSTRACT-CONNECT:/tmp/.X11-unix/X1
-```
-
-Then set the app container display override:
-
-```env
-AGENT_X11_DISPLAY=:99
-```
-
-Use `X1` in the `socat` command when your host `DISPLAY` is `:1`; use `X0` when it is `:0`.
+On X11 sessions, the app also includes a fallback path using `wmctrl`, `xdotool`, and `x11-utils` for common window-management actions if unsafe mode is not enabled. Install those packages on the host if you need the fallback.
 
 ### Volumes
 
 | Volume | Purpose |
 |--------|---------|
 | `./workspace:/workspace` | Agent's sandboxed working directory |
-| `.:/app` *(dev only)* | Source code mount for hot reload |
 | `pgdata` | PostgreSQL data persistence |
 | `neo4jdata` | Neo4j data persistence |
 
@@ -271,11 +272,12 @@ tests/
 
 | Layer | Mechanism |
 |-------|-----------|
-| **Container Isolation** | All tools run inside the Docker container |
-| **File Isolation** | Agent can only access `/workspace` (mounted volume) |
+| **Terminal Isolation** | `execute_command` runs through `docker exec agent_app` |
+| **Host Terminal Approval** | `host_execute_command` runs on the host only after human approval |
+| **File Isolation** | File tools are constrained to `${WORKSPACE_ROOT:-./workspace}` shared with `/workspace` in the sandbox |
 | **Command Timeout** | Terminal commands are killed after 30 seconds |
 | **Path Validation** | File tools validate paths stay within workspace |
-| **Human-in-the-Loop** | Destructive operations require approval before execution |
+| **Human-in-the-Loop** | Destructive, sandbox lifecycle, and host desktop operations require approval before execution |
 
 ---
 
@@ -286,7 +288,7 @@ tests/
 - **LLM**: Anthropic SDK (via local proxy)
 - **Memory**: PostgreSQL + pgvector (episodic) / Neo4j (semantic knowledge graph)
 - **Embeddings**: Ollama (mxbai-embed-large)
-- **Containerization**: Docker + Docker Compose (profiles for dev/prod)
+- **Containerization**: Docker + Docker Compose for infra/sandbox plus optional Docker-only app profile
 - **Language**: TypeScript
 
 ---

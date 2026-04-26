@@ -1,49 +1,66 @@
 services:
-  # ── Dev mode: hot-reload with source mounted ──────────────────────────────
+  # ── Agent sandbox runtime: terminal/workspace environment ─────────────────
+  agent_app:
+    build:
+      context: .
+      target: runtime
+    container_name: agent_app
+    restart: unless-stopped
+    volumes:
+      - ${AGENT_WORKSPACE:-./workspace}:/workspace
+    environment:
+      - WORKSPACE_ROOT=/workspace
+    command: ["bash", "-lc", "sleep infinity"]
+
+  # ── Legacy containerized app mode: kept for Docker-only deployments ───────
   app-dev:
-    profiles: [ "dev" ]
+    profiles: [ "app" ]
     build:
       context: .
       target: dev
-    container_name: agent_app
+    container_name: localagnent_app_dev
     restart: unless-stopped
     ports:
       - "3333:3333"
     volumes:
-      - .:/app # source code for hot reload
-      - /app/node_modules # preserve container node_modules
-      - ${AGENT_WORKSPACE:-/home/agent_worker/workspace}:/home/agent_worker/workspace # agent sandbox
-      - /tmp/.X11-unix:/tmp/.X11-unix # share host X11 socket for headful camofox login
-      - ${FIREFOX_PROFILE_SRC:-/home/belal/snap/firefox/common/.mozilla/firefox/s3x8rw3t.default}:/host-firefox-profile:ro # host Firefox profile (read-only source for import)
-    environment:
-      - DISPLAY=${DISPLAY:-:1} # forward host display into container
-      # Optional X11 filesystem-socket proxy for tools such as wmctrl/xdotool.
-      # If direct DISPLAY fails, run the README socat proxy (host X1 -> container X99).
-      - AGENT_X11_DISPLAY=${AGENT_X11_DISPLAY:-:99}
+      - .:/app
+      - /app/node_modules
+      - ${AGENT_WORKSPACE:-./workspace}:/workspace
     depends_on:
+      - agent_app
       - postgres
       - neo4j
       - scrapling-mcp
       - cognee
     env_file:
       - .env.local
+    environment:
+      - AGENT_RUNNING_IN_DOCKER=true
+      - WORKSPACE_ROOT=/workspace
+      - AGENT_WORKSPACE=/workspace
+      - AGENT_RUNTIME_CONTAINER=agent_app
+      - AGENT_RUNTIME_WORKSPACE=/workspace
+      - AGENT_PG_URI=postgresql://agent:agent_local_dev@postgres:5432/agent_memory
+      - AGENT_NEO4J_URI=bolt://neo4j:7687
+      - AGENT_OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_EMBED_URL=http://host.docker.internal:11434/api/embed
+      - COGNEE_URL=http://cognee:8000
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  # ── Prod mode: built image ────────────────────────────────────────────────
   app-prod:
-    profiles: [ "prod" ]
+    profiles: [ "app" ]
     build:
       context: .
       target: prod
-    container_name: agent_app_prod
+    container_name: localagnent_app_prod
     restart: unless-stopped
     ports:
       - "3333:3333"
     volumes:
-      - ${AGENT_WORKSPACE:-/home/agent_worker/workspace}:/home/agent_worker/workspace
-      - /tmp/.X11-unix:/tmp/.X11-unix # share host/proxy X11 socket for GNOME window fallback
+      - ${AGENT_WORKSPACE:-./workspace}:/workspace
     depends_on:
+      - agent_app
       - postgres
       - neo4j
       - scrapling-mcp
@@ -51,8 +68,16 @@ services:
     env_file:
       - .env.local
     environment:
-      - DISPLAY=${DISPLAY:-:1}
-      - AGENT_X11_DISPLAY=${AGENT_X11_DISPLAY:-:99}
+      - AGENT_RUNNING_IN_DOCKER=true
+      - WORKSPACE_ROOT=/workspace
+      - AGENT_WORKSPACE=/workspace
+      - AGENT_RUNTIME_CONTAINER=agent_app
+      - AGENT_RUNTIME_WORKSPACE=/workspace
+      - AGENT_PG_URI=postgresql://agent:agent_local_dev@postgres:5432/agent_memory
+      - AGENT_NEO4J_URI=bolt://neo4j:7687
+      - AGENT_OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_EMBED_URL=http://host.docker.internal:11434/api/embed
+      - COGNEE_URL=http://cognee:8000
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

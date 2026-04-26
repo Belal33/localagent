@@ -4,6 +4,7 @@ import {
     getLastImportTime,
     hasCookiesImported,
     HOST_PROFILE_SRC,
+    discoverFirefoxProfile,
 } from "@/lib/agent/skills/camofox/profile-import";
 import { SESSIONS_DIR, refreshImportedCookies } from "@/lib/agent/skills/camofox/shared";
 
@@ -12,8 +13,10 @@ export const runtime = "nodejs";
 /** GET — returns current import status. */
 export async function GET() {
     const lastImport = await getLastImportTime();
+    const discovered = await discoverFirefoxProfile();
     return NextResponse.json({
-        hostProfilePath: HOST_PROFILE_SRC,
+        hostProfilePath: HOST_PROFILE_SRC || discovered || null,
+        discoveredProfile: discovered,
         sessionsDir: SESSIONS_DIR,
         lastImport,
         imported: await hasCookiesImported(),

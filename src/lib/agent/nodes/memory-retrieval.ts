@@ -11,8 +11,8 @@
  */
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { searchEpisodes, type EpisodeResult } from "@/lib/memory/episodes";
-
-const COGNEE_BASE_URL = process.env.COGNEE_URL || "http://cognee:8000";
+import { COGNEE_BASE_URL } from "@/lib/cognee-client";
+import { getAgentSettingsSync } from "../settings";
 
 const MIN_CHUNK_LENGTH = 10;
 const USER_ECHO_PATTERN = /^(User|Assistant|Human|AI):\s/i;
@@ -64,6 +64,10 @@ function extractText(item: unknown): string {
 
 export async function memoryRetrievalNode(state: { messages: unknown[] }) {
     try {
+        if (!getAgentSettingsSync().memoryEnabled) {
+            return {};
+        }
+
         // Extract the latest human message text
         const lastMessage = state.messages[state.messages.length - 1] as {
             content: string | Array<{ type: string; text?: string }>;

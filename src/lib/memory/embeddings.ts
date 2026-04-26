@@ -6,9 +6,10 @@
  * dimension defined in infra/init.sql.
  */
 import { OllamaEmbeddings } from "@langchain/ollama";
+import { localizeHostServiceUrl } from "@/lib/local-runtime";
 
 const OLLAMA_BASE_URL =
-    process.env.AGENT_OLLAMA_URL ?? "http://host.docker.internal:11434";
+    localizeHostServiceUrl(process.env.AGENT_OLLAMA_URL ?? "http://host.docker.internal:11434");
 
 const EMBEDDING_MODEL =
     process.env.AGENT_EMBEDDING_MODEL ?? "mxbai-embed-large:latest";

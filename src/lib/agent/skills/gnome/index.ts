@@ -5,10 +5,10 @@ import { gnomeTools } from "./tools";
 export const gnomeSkill: Skill = {
     name: "gnome",
     description:
-        "GNOME desktop control through the host gnome-mcp-server bridge. " +
+        "GNOME desktop control through the host gnome-mcp-server. " +
         "Use for Ubuntu/GNOME notifications, launching apps, opening files, wallpaper, volume, media playback, quick settings, screenshots, window management, and keyring operations.",
     tools: gnomeTools,
     alwaysActive: false,
     onActivate: async () =>
-        `GNOME MCP bridge URL: ${getGnomeMcpUrl()}. If tools fail to connect, start the host bridge first.`,
+        `GNOME MCP endpoint: ${getGnomeMcpUrl()}. If tools fail to connect, verify GNOME_MCP_COMMAND or the Docker HTTP bridge.`,
 };

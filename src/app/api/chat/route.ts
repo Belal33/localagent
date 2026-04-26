@@ -3,6 +3,7 @@ import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { getAgentGraph } from "@/lib/agent/graph";
 import { distillConversation } from "@/lib/memory/distiller";
 import { extractWorkspaceScreenshotName, screenshotArtifactUrl } from "@/lib/agent/screenshot-artifacts";
+import { getAgentSettingsSync } from "@/lib/agent/settings";
 
 // Allow longer execution times for local inference + tool execution
 export const dynamic = "force-dynamic";
@@ -319,21 +320,23 @@ export async function POST(req: NextRequest) {
                     // Stream complete
                     controller.enqueue(ndjsonLine({ type: "done" }));
 
-                    // ─── Fire-and-forget memory distillation ──────────────────
-                    // Uses full thread history from checkpointer (not just current request)
-                    // so the distiller can build a complete episode summary.
-                    const tid = threadId || "default_thread";
-                    graph.getState(config).then((threadState) => {
-                        const fullHistory = (threadState.values as any)?.messages || langchainMessages;
-                        distillConversation("default", tid, fullHistory).catch((err) =>
-                            console.error("[Memory Distiller] Background distillation failed:", err),
-                        );
-                    }).catch(() => {
-                        // Fallback: use current request messages if state read fails
-                        distillConversation("default", tid, langchainMessages).catch((err) =>
-                            console.error("[Memory Distiller] Background distillation failed:", err),
-                        );
-                    });
+                    if (getAgentSettingsSync().memoryEnabled) {
+                        // ─── Fire-and-forget memory distillation ──────────────────
+                        // Uses full thread history from checkpointer (not just current request)
+                        // so the distiller can build a complete episode summary.
+                        const tid = threadId || "default_thread";
+                        graph.getState(config).then((threadState) => {
+                            const fullHistory = (threadState.values as any)?.messages || langchainMessages;
+                            distillConversation("default", tid, fullHistory).catch((err) =>
+                                console.error("[Memory Distiller] Background distillation failed:", err),
+                            );
+                        }).catch(() => {
+                            // Fallback: use current request messages if state read fails
+                            distillConversation("default", tid, langchainMessages).catch((err) =>
+                                console.error("[Memory Distiller] Background distillation failed:", err),
+                            );
+                        });
+                    }
                 } catch (err) {
                     if (!isClosed) {
                         // Check if this is a GraphInterrupt (from interrupt())

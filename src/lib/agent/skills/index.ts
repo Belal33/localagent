@@ -5,6 +5,7 @@ import { filesystemSkill } from "./filesystem";
 import { camofoxSkill } from "./camofox";
 import { scrapingSkill } from "./scraping";
 import { gnomeSkill } from "./gnome";
+import { getAgentSettingsSync, type AgentSettings } from "../settings";
 
 /**
  * ─── Skill Registry ─────────────────────────────────────────────────────────
@@ -40,13 +41,72 @@ const allSkills: Skill[] = [coreSkill, filesystemSkill, camofoxSkill, scrapingSk
 // ─── Placeholder Tool Prefix ────────────────────────────────────────────────
 const PLACEHOLDER_PREFIX = "use_";
 
+function resolveSettings(settings?: AgentSettings): AgentSettings {
+    return settings ?? getAgentSettingsSync();
+}
+
+function isSkillEnabled(skill: Skill, settings: AgentSettings): boolean {
+    return settings.skills[skill.name]?.enabled ?? true;
+}
+
+function getEnabledToolsForSkill(skill: Skill, settings: AgentSettings): DynamicStructuredTool[] {
+    const toolSettings = settings.skills[skill.name]?.tools ?? {};
+    return skill.tools.filter((tool) => toolSettings[tool.name] !== false);
+}
+
+function createSkillPlaceholderTool(skill: Skill, settings?: AgentSettings): DynamicStructuredTool {
+    const effectiveSettings = resolveSettings(settings);
+    const enabledTools = getEnabledToolsForSkill(skill, effectiveSettings);
+
+    return new DynamicStructuredTool({
+        name: `${PLACEHOLDER_PREFIX}${skill.name}`,
+        description:
+            `Activate the "${skill.name}" skill to gain access to its tools. ` +
+            `${skill.description} ` +
+            `Tools included: ${enabledTools.map((t) => t.name).join(", ") || "none"}. ` +
+            `Call this tool when you need any of these capabilities.`,
+        schema: z.object({}),
+        func: async () => {
+            const latestSettings = getAgentSettingsSync();
+            if (!isSkillEnabled(skill, latestSettings)) {
+                return `Skill "${skill.name}" is disabled in agent settings.`;
+            }
+
+            const latestEnabledTools = getEnabledToolsForSkill(skill, latestSettings);
+            if (latestEnabledTools.length === 0) {
+                return `Skill "${skill.name}" has no enabled tools in agent settings.`;
+            }
+
+            const toolNames = latestEnabledTools.map((t) => t.name).join(", ");
+            let extra = "";
+            if (skill.onActivate) {
+                try {
+                    const r = await skill.onActivate();
+                    if (typeof r === "string" && r) extra = ` ${r}`;
+                } catch (err) {
+                    console.warn(
+                        `[skills] onActivate hook for "${skill.name}" failed:`,
+                        err,
+                    );
+                }
+            }
+            return (
+                `✅ Skill "${skill.name}" activated! ` +
+                `You now have access to: ${toolNames}.${extra} ` +
+                `Use these tools directly in your next action.`
+            );
+        },
+    });
+}
+
 /**
  * Returns all tools from always-active skills.
  */
-export function getActiveTools(): DynamicStructuredTool[] {
+export function getActiveTools(settings?: AgentSettings): DynamicStructuredTool[] {
+    const effectiveSettings = resolveSettings(settings);
     return allSkills
-        .filter((skill) => skill.alwaysActive)
-        .flatMap((skill) => skill.tools);
+        .filter((skill) => skill.alwaysActive && isSkillEnabled(skill, effectiveSettings))
+        .flatMap((skill) => getEnabledToolsForSkill(skill, effectiveSettings));
 }
 
 /**
@@ -61,41 +121,15 @@ export function getSkillRegistry(): Skill[] {
  * named `use_{skill.name}`. The agent sees this tool with the skill's
  * description and can call it to activate the skill.
  */
-export function getSkillPlaceholderTools(): DynamicStructuredTool[] {
+export function getSkillPlaceholderTools(settings?: AgentSettings): DynamicStructuredTool[] {
+    const effectiveSettings = resolveSettings(settings);
     return allSkills
-        .filter((skill) => !skill.alwaysActive)
-        .map(
-            (skill) =>
-                new DynamicStructuredTool({
-                    name: `${PLACEHOLDER_PREFIX}${skill.name}`,
-                    description:
-                        `Activate the "${skill.name}" skill to gain access to its tools. ` +
-                        `${skill.description} ` +
-                        `Tools included: ${skill.tools.map((t) => t.name).join(", ")}. ` +
-                        `Call this tool when you need any of these capabilities.`,
-                    schema: z.object({}),
-                    func: async () => {
-                        const toolNames = skill.tools.map((t) => t.name).join(", ");
-                        let extra = "";
-                        if (skill.onActivate) {
-                            try {
-                                const r = await skill.onActivate();
-                                if (typeof r === "string" && r) extra = ` ${r}`;
-                            } catch (err) {
-                                console.warn(
-                                    `[skills] onActivate hook for "${skill.name}" failed:`,
-                                    err,
-                                );
-                            }
-                        }
-                        return (
-                            `✅ Skill "${skill.name}" activated! ` +
-                            `You now have access to: ${toolNames}.${extra} ` +
-                            `Use these tools directly in your next action.`
-                        );
-                    },
-                })
-        );
+        .filter((skill) => (
+            !skill.alwaysActive &&
+            isSkillEnabled(skill, effectiveSettings) &&
+            getEnabledToolsForSkill(skill, effectiveSettings).length > 0
+        ))
+        .map((skill) => createSkillPlaceholderTool(skill, effectiveSettings));
 }
 
 /**
@@ -106,19 +140,20 @@ export function getSkillPlaceholderTools(): DynamicStructuredTool[] {
  * - Activated skill tools replace their placeholder
  * - Still-inactive skills appear as placeholder tools
  */
-export function getToolsForState(activeSkillNames: string[]): DynamicStructuredTool[] {
+export function getToolsForState(activeSkillNames: string[], settings?: AgentSettings): DynamicStructuredTool[] {
+    const effectiveSettings = resolveSettings(settings);
     const tools: DynamicStructuredTool[] = [];
 
     for (const skill of allSkills) {
+        if (!isSkillEnabled(skill, effectiveSettings)) continue;
+
+        const enabledTools = getEnabledToolsForSkill(skill, effectiveSettings);
+        if (enabledTools.length === 0) continue;
+
         if (skill.alwaysActive || activeSkillNames.includes(skill.name)) {
-            // Include the real tools
-            tools.push(...skill.tools);
+            tools.push(...enabledTools);
         } else {
-            // Include the placeholder tool
-            const placeholder = getSkillPlaceholderTools().find(
-                (t) => t.name === `${PLACEHOLDER_PREFIX}${skill.name}`
-            );
-            if (placeholder) tools.push(placeholder);
+            tools.push(createSkillPlaceholderTool(skill, effectiveSettings));
         }
     }
 
@@ -129,19 +164,43 @@ export function getToolsForState(activeSkillNames: string[]): DynamicStructuredT
  * Returns ALL possible tools (active + inactive real tools + placeholders).
  * Used to register with ToolNode so it can execute any tool call.
  */
-export function getAllPossibleTools(): DynamicStructuredTool[] {
-    const realTools = allSkills.flatMap((skill) => skill.tools);
-    const placeholders = getSkillPlaceholderTools();
+export function getAllPossibleTools(options: {
+    settings?: AgentSettings;
+    respectSettings?: boolean;
+} = {}): DynamicStructuredTool[] {
+    if (options.respectSettings === false) {
+        const realTools = allSkills.flatMap((skill) => skill.tools);
+        const placeholders = allSkills
+            .filter((skill) => !skill.alwaysActive)
+            .map((skill) => createSkillPlaceholderTool(skill));
+        return [...realTools, ...placeholders];
+    }
+
+    const effectiveSettings = resolveSettings(options.settings);
+    const realTools = allSkills
+        .filter((skill) => isSkillEnabled(skill, effectiveSettings))
+        .flatMap((skill) => getEnabledToolsForSkill(skill, effectiveSettings));
+    const placeholders = getSkillPlaceholderTools(effectiveSettings);
     return [...realTools, ...placeholders];
+}
+
+export function getEnabledToolNames(settings?: AgentSettings): Set<string> {
+    return new Set(getAllPossibleTools({ settings, respectSettings: true }).map((tool) => tool.name));
 }
 
 /**
  * Checks if a tool name is a skill placeholder (starts with "use_").
  * Returns the skill name if it is, or null otherwise.
  */
-export function getSkillNameFromPlaceholder(toolName: string): string | null {
+export function getSkillNameFromPlaceholder(toolName: string, settings?: AgentSettings): string | null {
     if (!toolName.startsWith(PLACEHOLDER_PREFIX)) return null;
     const skillName = toolName.slice(PLACEHOLDER_PREFIX.length);
-    const exists = allSkills.some((s) => s.name === skillName);
-    return exists ? skillName : null;
+    const skill = allSkills.find((s) => s.name === skillName);
+    if (!skill) return null;
+
+    const effectiveSettings = resolveSettings(settings);
+    if (!isSkillEnabled(skill, effectiveSettings)) return null;
+    if (getEnabledToolsForSkill(skill, effectiveSettings).length === 0) return null;
+
+    return skillName;
 }

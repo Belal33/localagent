@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import { Pool } from "pg";
 import neo4j from "neo4j-driver";
+import { localizeDockerServiceUri, localizeHostServiceUrl } from "@/lib/local-runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -33,8 +34,8 @@ interface HealthResponse {
 
 async function checkPostgres(): Promise<ServiceStatus> {
     const uri =
-        process.env.AGENT_PG_URI ??
-        "postgresql://agent:agent_local_dev@postgres:5432/agent_memory";
+        localizeDockerServiceUri(process.env.AGENT_PG_URI ??
+            "postgresql://agent:agent_local_dev@postgres:5432/agent_memory");
     const pool = new Pool({ connectionString: uri, connectionTimeoutMillis: 5000 });
     const start = Date.now();
     try {
@@ -52,7 +53,7 @@ async function checkPostgres(): Promise<ServiceStatus> {
 }
 
 async function checkNeo4j(): Promise<ServiceStatus> {
-    const uri = process.env.AGENT_NEO4J_URI ?? "bolt://neo4j:7687";
+    const uri = localizeDockerServiceUri(process.env.AGENT_NEO4J_URI ?? "bolt://neo4j:7687");
     const user = process.env.AGENT_NEO4J_USER ?? "neo4j";
     const pass = process.env.AGENT_NEO4J_PASS ?? "agent_local_dev";
     const driver = neo4j.driver(uri, neo4j.auth.basic(user, pass));
@@ -72,7 +73,7 @@ async function checkNeo4j(): Promise<ServiceStatus> {
 }
 
 async function checkAnthropicProxy(): Promise<ServiceStatus> {
-    const url = process.env.ANTHROPIC_PROXY_URL ?? "http://host.docker.internal:8080";
+    const url = localizeHostServiceUrl(process.env.ANTHROPIC_PROXY_URL ?? "http://host.docker.internal:8080");
     const start = Date.now();
     try {
         const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) });
@@ -87,7 +88,7 @@ async function checkAnthropicProxy(): Promise<ServiceStatus> {
 }
 
 async function checkOllama(): Promise<ServiceStatus> {
-    const url = process.env.AGENT_OLLAMA_URL ?? "http://host.docker.internal:11434";
+    const url = localizeHostServiceUrl(process.env.AGENT_OLLAMA_URL ?? "http://host.docker.internal:11434");
     const start = Date.now();
     try {
         const res = await fetch(`${url}/api/tags`, { method: "GET", signal: AbortSignal.timeout(5000) });

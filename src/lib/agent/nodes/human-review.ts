@@ -15,6 +15,7 @@ import { interrupt, Command } from "@langchain/langgraph";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { classifyAllToolCalls } from "../safety";
 import type { AgentState } from "../state";
+import { getAgentSettingsSync } from "../settings";
 
 export interface ApprovalDecision {
     action: "approve" | "reject" | "edit";
@@ -45,8 +46,10 @@ export function humanReviewNode(state: AgentState): Command {
     }
 
     // Classify all tool calls against the whitelist
+    const settings = getAgentSettingsSync();
     const { allSafe, results } = classifyAllToolCalls(
-        toolCalls.map((tc) => ({ name: tc.name, args: tc.args as Record<string, unknown> }))
+        toolCalls.map((tc) => ({ name: tc.name, args: tc.args as Record<string, unknown> })),
+        settings,
     );
 
     console.log(`[HumanReview] allSafe=${allSafe}, results=${JSON.stringify(results.map(r => ({ tool: r.toolName, safe: r.safe })))}`);

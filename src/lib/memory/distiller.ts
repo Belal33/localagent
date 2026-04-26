@@ -15,8 +15,8 @@ import { type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { upsertEpisode } from "./episodes";
+import { COGNEE_BASE_URL } from "@/lib/cognee-client";
 
-const COGNEE_BASE_URL = process.env.COGNEE_URL || "http://cognee:8000";
 const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
 
 interface DistillerOutput {

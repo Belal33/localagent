@@ -1,6 +1,7 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { Pool } from "pg";
+import { localizeDockerServiceUri } from "@/lib/local-runtime";
 import {
     saveSession,
     listSessions,
@@ -13,8 +14,8 @@ import { encrypt, decrypt, isEncryptionAvailable } from "./crypto";
 // ─── Postgres pool for credentials vault ───────────────────────────────────
 
 const PG_URI =
-    process.env.AGENT_PG_URI ??
-    "postgresql://agent:agent_local_dev@postgres:5432/agent_memory";
+    localizeDockerServiceUri(process.env.AGENT_PG_URI ??
+        "postgresql://agent:agent_local_dev@postgres:5432/agent_memory");
 
 let pool: Pool | null = null;
 function getPool(): Pool {

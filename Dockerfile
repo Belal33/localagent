@@ -31,13 +31,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD= npx camoufox fetch && chmod -R 755 /root/.cache/camoufox
 
+# ── Runtime target: persistent agent terminal sandbox ─────────────────────────
+FROM base AS runtime
+ENV NODE_ENV=development
+ENV WORKSPACE_ROOT=/workspace
+RUN mkdir -p /workspace
+WORKDIR /workspace
+CMD ["bash", "-lc", "sleep infinity"]
+
 # ── Dev target (source mounted as volume, hot reload) ────────────────────────
 FROM base AS dev
 ENV NODE_ENV=development
 # Create the workspace directory. In dev this is overridden by the bind-mount
 # at /home/agent_worker/workspace; the mkdir ensures it exists if running
 # outside Docker without a mount.
-RUN mkdir -p /home/agent_worker/workspace
+RUN mkdir -p /workspace
 EXPOSE 3333
 CMD ["npx", "next", "dev", "-p", "3333"]
 
@@ -53,6 +61,6 @@ ENV AGENT_PG_URI=postgresql://x:x@localhost/x
 ENV AGENT_NEO4J_URI=bolt://localhost:7687
 RUN npm run build
 ENV NODE_ENV=production
-RUN mkdir -p /home/agent_worker/workspace
+RUN mkdir -p /workspace
 EXPOSE 3333
 CMD ["npx", "next", "start", "-p", "3333"]

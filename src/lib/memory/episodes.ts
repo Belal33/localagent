@@ -14,13 +14,14 @@
  *   - searchEpisodes: find relevant past episodes via cosine similarity
  */
 import pg from "pg";
+import { localizeDockerServiceUri, localizeHostServiceUrl } from "@/lib/local-runtime";
 
 const PG_URI =
-    process.env.AGENT_PG_URI ??
-    "postgresql://agent:agent_local_dev@postgres:5432/agent_memory";
+    localizeDockerServiceUri(process.env.AGENT_PG_URI ??
+        "postgresql://agent:agent_local_dev@postgres:5432/agent_memory");
 
 const OLLAMA_EMBED_URL =
-    process.env.OLLAMA_EMBED_URL ?? "http://host.docker.internal:11434/api/embed";
+    localizeHostServiceUrl(process.env.OLLAMA_EMBED_URL ?? "http://host.docker.internal:11434/api/embed");
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "mxbai-embed-large:latest";
 
 // ─── Pool (singleton) ───────────────────────────────────────────────────────

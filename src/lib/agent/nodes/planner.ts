@@ -16,6 +16,7 @@ import type { AgentState } from "../state";
 import { getPlannerLLMFromConfig } from "./shared";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { getAllPossibleTools } from "../skills";
+import { getAgentSettingsSync } from "../settings";
 
 const planSchema = z.object({
     steps: z
@@ -92,7 +93,7 @@ export async function plannerNode(
     config: RunnableConfig
 ): Promise<Partial<AgentState>> {
     const plannerLLM = getPlannerLLMFromConfig(config);
-    const tools = getAllPossibleTools();
+    const tools = getAllPossibleTools({ settings: getAgentSettingsSync() });
     const toolDescriptions = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
     const PLANNER_SYSTEM = buildSystemPrompt(toolDescriptions);
 

@@ -10,25 +10,145 @@
  * profile written by a newer Firefox. Cookies, however, live in a stable SQLite
  * schema (moz_cookies) that has not changed in years.
  */
-import { copyFile, mkdir, writeFile, readFile, unlink, stat } from "node:fs/promises";
+import { copyFile, mkdir, writeFile, readFile, unlink, stat, readdir } from "node:fs/promises";
 import path from "node:path";
+import { homedir } from "node:os";
 import { encrypt, isEncryptionAvailable } from "./crypto";
-import { SESSIONS_DIR } from "./shared";
+import { IMPORTED_COOKIES_LABEL, SESSIONS_DIR } from "./shared";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-export const HOST_PROFILE_SRC =
-    process.env.FIREFOX_PROFILE_SRC ?? "/host-firefox-profile";
+export const HOST_PROFILE_SRC = process.env.FIREFOX_PROFILE_SRC ?? "";
 
-// Special session label used to store the Firefox-imported cookies.
-// shared.ts auto-loads this when creating the default (anonymous) context.
-export const IMPORTED_COOKIES_LABEL = "__firefox_import__";
+// Common Firefox profile base directories on Linux
+const FIREFOX_BASE_DIRS = [
+    path.join(homedir(), ".mozilla", "firefox"),
+    path.join(homedir(), "snap", "firefox", "common", ".mozilla", "firefox"),
+    path.join(homedir(), ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
+    "/host-firefox-profile", // legacy Docker mount
+];
 
 // Marker file written after a successful import so the UI can show last-import time.
 const MARKER_FILE = path.join(
-    process.env.CAMOFOX_SESSIONS_DIR ?? "/home/agent_worker/workspace/.camofox-sessions",
+    SESSIONS_DIR,
     ".firefox-import-marker",
 );
+
+// ─── Auto-discovery ──────────────────────────────────────────────────────────
+
+/**
+ * Parse a Firefox profiles.ini file and return the Path of the profile
+ * marked Default=1. Returns null if not found or file is unreadable.
+ */
+function parseDefaultProfilePath(iniPath: string): string | null {
+    try {
+        const text = readFileSync(iniPath, "utf8");
+        const lines = text.split(/\r?\n/);
+        let currentSection = "";
+        let pathValue: string | null = null;
+        let isDefault = false;
+
+        for (const line of lines) {
+            const sectionMatch = line.match(/^\[(\w+)\]$/);
+            if (sectionMatch) {
+                if (currentSection.startsWith("Profile") && isDefault && pathValue) {
+                    return pathValue;
+                }
+                currentSection = sectionMatch[1];
+                pathValue = null;
+                isDefault = false;
+                continue;
+            }
+
+            const pathMatch = line.match(/^Path=(.+)$/);
+            if (pathMatch && currentSection.startsWith("Profile")) {
+                pathValue = pathMatch[1];
+                continue;
+            }
+
+            const defaultMatch = line.match(/^Default=(\d)$/);
+            if (defaultMatch && currentSection.startsWith("Profile")) {
+                isDefault = defaultMatch[1] === "1";
+            }
+        }
+
+        if (isDefault && pathValue) return pathValue;
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function readFileSync(p: string, encoding: BufferEncoding): string {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("node:fs").readFileSync(p, encoding);
+}
+
+/**
+ * Discover the host Firefox profile directory that contains cookies.sqlite.
+ * Priority:
+ *   1. FIREFOX_PROFILE_SRC env var
+ *   2. profiles.ini Default=1 profile under known base dirs
+ *   3. Any sub-directory under known base dirs that contains cookies.sqlite
+ * Returns null if nothing is found.
+ */
+export async function discoverFirefoxProfile(): Promise<string | null> {
+    // 1. Explicit env var
+    if (HOST_PROFILE_SRC) {
+        try {
+            await stat(path.join(HOST_PROFILE_SRC, "cookies.sqlite"));
+            return HOST_PROFILE_SRC;
+        } catch {
+            // Env var points to invalid path — fall through to auto-discovery
+        }
+    }
+
+    // 2. Auto-discover from known base directories
+    for (const baseDir of FIREFOX_BASE_DIRS) {
+        try {
+            await stat(baseDir);
+        } catch {
+            continue;
+        }
+
+        // Try profiles.ini default profile first
+        const iniPath = path.join(baseDir, "profiles.ini");
+        try {
+            await stat(iniPath);
+            const relativePath = parseDefaultProfilePath(iniPath);
+            if (relativePath) {
+                const candidate = path.join(baseDir, relativePath);
+                try {
+                    await stat(path.join(candidate, "cookies.sqlite"));
+                    return candidate;
+                } catch {
+                    // Default profile has no cookies — keep looking
+                }
+            }
+        } catch {
+            // No profiles.ini
+        }
+
+        // Fallback: scan subdirectories for cookies.sqlite
+        try {
+            const entries = await readdir(baseDir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (!entry.isDirectory()) continue;
+                const candidate = path.join(baseDir, entry.name);
+                try {
+                    await stat(path.join(candidate, "cookies.sqlite"));
+                    return candidate;
+                } catch {
+                    // No cookies.sqlite here
+                }
+            }
+        } catch {
+            // Cannot read base dir
+        }
+    }
+
+    return null;
+}
 
 // ─── Firefox → Playwright cookie conversion ──────────────────────────────────
 
@@ -105,7 +225,7 @@ export interface ImportResult {
 }
 
 /**
- * Reads cookies.sqlite from the mounted host Firefox profile, converts every
+ * Reads cookies.sqlite from the host Firefox profile, converts every
  * cookie to Playwright's storageState format, encrypts the result, and saves
  * it as the __firefox_import__ session. The next camofox_create_tab call
  * automatically loads these cookies — no profile copy, no version conflicts.
@@ -113,22 +233,35 @@ export interface ImportResult {
 export async function importFirefoxCookies(opts?: {
     src?: string;
 }): Promise<ImportResult> {
-    const src = opts?.src ?? HOST_PROFILE_SRC;
-
     if (!isEncryptionAvailable()) {
         throw new Error("AGENT_SECRET_KEY is not set. Cannot encrypt imported cookies.");
+    }
+
+    // Resolve source: explicit opt > env var > auto-discovery
+    let src = opts?.src ?? null;
+    if (!src) {
+        const discovered = await discoverFirefoxProfile();
+        if (!discovered) {
+            throw new Error(
+                "Could not find a Firefox profile with cookies.sqlite. " +
+                "Tried: " + FIREFOX_BASE_DIRS.join(", ") + ". " +
+                "Install Firefox and browse a few sites, or set FIREFOX_PROFILE_SRC " +
+                "to your profile directory (e.g. /home/user/snap/firefox/common/.mozilla/firefox/xxxx.default).",
+            );
+        }
+        src = discovered;
     }
 
     const cookiesDb = path.join(src, "cookies.sqlite");
     const cookiesWal = cookiesDb + "-wal";
 
-    // Check source is mounted and has cookies
+    // Check source has cookies
     try {
         await stat(cookiesDb);
     } catch {
         throw new Error(
             `cookies.sqlite not found at "${cookiesDb}". ` +
-            `Make sure the Firefox profile is mounted at ${src} in docker-compose.yml.`,
+            `Set FIREFOX_PROFILE_SRC to your host Firefox profile directory.`,
         );
     }
 
@@ -171,11 +304,10 @@ export async function importFirefoxCookies(opts?: {
     // Save as encrypted Playwright storageState under the special import label
     const storageState = { cookies, origins: [] };
     await mkdir(
-        process.env.CAMOFOX_SESSIONS_DIR ?? "/home/agent_worker/workspace/.camofox-sessions",
+        SESSIONS_DIR,
         { recursive: true },
     );
-    const sessionsDir = process.env.CAMOFOX_SESSIONS_DIR ?? "/home/agent_worker/workspace/.camofox-sessions";
-    const sessionFile = path.join(sessionsDir, `${IMPORTED_COOKIES_LABEL}.json.enc`);
+    const sessionFile = path.join(SESSIONS_DIR, `${IMPORTED_COOKIES_LABEL}.json.enc`);
     await writeFile(sessionFile, encrypt(JSON.stringify(storageState)), "utf8");
 
     // Write marker for the UI

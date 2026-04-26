@@ -3,7 +3,7 @@ import type { Browser, Page, BrowserContext } from "playwright-core";
 import { mkdir, readFile, writeFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { encrypt, decrypt, isEncryptionAvailable } from "./crypto";
-import { IMPORTED_COOKIES_LABEL } from "./profile-import";
+import { WORKSPACE_ROOT } from "../filesystem/shared";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -13,9 +13,10 @@ const HEADLESS = true;
 
 // Encrypted storageState files live here (on the bind-mounted volume).
 export const SESSIONS_DIR =
-    process.env.CAMOFOX_SESSIONS_DIR ?? "/home/agent_worker/workspace/.camofox-sessions";
+    process.env.CAMOFOX_SESSIONS_DIR ?? path.join(WORKSPACE_ROOT, ".camofox-sessions");
 
 const DEFAULT_LABEL = "__default__";
+export const IMPORTED_COOKIES_LABEL = "__firefox_import__";
 
 // ─── Browser Lifecycle ──────────────────────────────────────────────────────
 

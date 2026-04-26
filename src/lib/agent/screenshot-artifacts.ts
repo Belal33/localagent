@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { getWorkspaceRoot } from "@/lib/workspace-root";
 
-export const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? process.env.AGENT_WORKSPACE ?? "/workspace";
+export const WORKSPACE_ROOT = getWorkspaceRoot();
 export const SCREENSHOT_ARTIFACT_DIR = resolve(join(WORKSPACE_ROOT, "screenshots"));
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
@@ -15,6 +16,10 @@ export interface ScreenshotArtifact {
 
 export function screenshotArtifactUrl(name: string): string {
     return `/api/screenshots/${encodeURIComponent(name)}`;
+}
+
+export function screenshotArtifactName(path: string): string {
+    return resolve(path);
 }
 
 export async function saveScreenshotArtifact(
@@ -37,28 +42,28 @@ export async function saveScreenshotArtifact(
 }
 
 export function resolveScreenshotArtifact(name: string): { path: string; mimeType: string } | null {
-    const safeName = basename(name);
-    if (!safeName || safeName !== name || safeName.startsWith(".")) return null;
+    const decoded = decodePath(name);
+    if (!decoded) return null;
 
-    const mimeType = mimeTypeForImage(safeName);
+    const path = decoded.startsWith("/")
+        ? resolve(decoded)
+        : resolve(join(SCREENSHOT_ARTIFACT_DIR, basename(decoded)));
+
+    const mimeType = mimeTypeForImage(path);
     if (!mimeType) return null;
 
-    const path = resolve(join(SCREENSHOT_ARTIFACT_DIR, safeName));
-    if (!path.startsWith(`${SCREENSHOT_ARTIFACT_DIR}/`)) return null;
+    if (!isAllowedScreenshotPath(path)) return null;
 
     return { path, mimeType };
 }
 
 export function extractWorkspaceScreenshotName(text: string): string | null {
     const path = extractWorkspaceScreenshotPath(text);
-    return path ? basename(path) : null;
+    return path ? screenshotArtifactName(path) : null;
 }
 
 export function extractWorkspaceScreenshotPath(text: string): string | null {
-    return extractImagePaths(text).find((candidate) => {
-        const resolved = resolve(candidate);
-        return resolved.startsWith(`${SCREENSHOT_ARTIFACT_DIR}/`);
-    }) ?? null;
+    return extractImagePaths(text).map((candidate) => resolve(candidate)).find(isAllowedScreenshotPath) ?? null;
 }
 
 export function mimeTypeForImage(path: string): string | null {
@@ -87,4 +92,15 @@ function decodePath(path: string): string | null {
 function extensionFor(path: string): string {
     const match = path.toLowerCase().match(/\.(png|jpe?g|webp)$/);
     return match ? `.${match[1] === "jpg" ? "jpg" : match[1]}` : "";
+}
+
+function isAllowedScreenshotPath(path: string): boolean {
+    const allowedRoots = [
+        SCREENSHOT_ARTIFACT_DIR,
+        resolve(`${process.env.HOME ?? ""}/Pictures`),
+        resolve(`${process.env.HOME ?? ""}/Pictures/Screenshots`),
+        ...(process.env.HOST_PICTURES_DIR ? [resolve(process.env.HOST_PICTURES_DIR)] : []),
+    ].filter((root) => root !== "/");
+
+    return allowedRoots.some((root) => path === root || path.startsWith(`${root}/`));
 }

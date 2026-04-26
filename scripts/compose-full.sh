@@ -3,12 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-dev}"
-GNOME_MCP_BIN="${GNOME_MCP_BIN:-$HOME/.cargo/bin/gnome-mcp-server}"
-GNOME_MCP_PORT="${GNOME_MCP_PORT:-8930}"
-X11_PROXY_DISPLAY="${AGENT_X11_DISPLAY:-:99}"
-HOST_DISPLAY="${DISPLAY:-:1}"
-HOST_PICTURES_DIR="${HOST_PICTURES_DIR:-$HOME/Pictures}"
-HOST_WORKSPACE_DIR="${AGENT_WORKSPACE:-/home/agent_worker/workspace}"
+HOST_WORKSPACE_DIR="${AGENT_WORKSPACE:-$ROOT_DIR/workspace}"
+FALLBACK_WORKSPACE_DIR="${LOCALAGNENT_WORKSPACE_FALLBACK:-$HOME/.local/share/localagnent/workspace}"
 
 if [[ "$#" -gt 0 ]]; then
   shift
@@ -39,82 +35,19 @@ require_command() {
   fi
 }
 
-display_number() {
-  local display="$1"
-  display="${display#localhost:}"
-  display="${display#unix/}"
-  display="${display#unix:}"
-  display="${display#:}"
-  display="${display%%.*}"
-  echo "$display"
-}
-
-is_port_open() {
-  node -e "const net=require('net'); const s=net.connect(Number(process.argv[1]), '127.0.0.1'); s.once('connect',()=>{s.end(); process.exit(0)}); s.once('error',()=>process.exit(1)); setTimeout(()=>process.exit(1), 500);" "$1" >/dev/null 2>&1
-}
-
-start_gnome_bridge() {
-  if is_port_open "$GNOME_MCP_PORT"; then
-    echo "GNOME MCP bridge already listening on port $GNOME_MCP_PORT"
+ensure_workspace_dir() {
+  if mkdir -p "$HOST_WORKSPACE_DIR" 2>/dev/null && [[ -w "$HOST_WORKSPACE_DIR" ]]; then
     return
   fi
 
-  if [[ ! -x "$GNOME_MCP_BIN" ]]; then
-    echo "GNOME MCP server not found or not executable: $GNOME_MCP_BIN" >&2
-    echo "Install it with: cargo install --path <gnome-mcp-server repo>" >&2
+  echo "Workspace is not writable: $HOST_WORKSPACE_DIR" >&2
+  echo "Using writable fallback workspace: $FALLBACK_WORKSPACE_DIR" >&2
+  HOST_WORKSPACE_DIR="$FALLBACK_WORKSPACE_DIR"
+
+  if ! mkdir -p "$HOST_WORKSPACE_DIR"; then
+    echo "Failed to create fallback workspace: $HOST_WORKSPACE_DIR" >&2
     exit 1
   fi
-
-  require_command npx
-
-  echo "Starting GNOME MCP bridge on http://localhost:$GNOME_MCP_PORT/mcp"
-  nohup npx -y supergateway \
-    --stdio "$GNOME_MCP_BIN" \
-    --outputTransport streamableHttp \
-    --port "$GNOME_MCP_PORT" \
-    >/tmp/localagnent-gnome-mcp.log 2>&1 &
-
-  local pid=$!
-  local pid_file=/tmp/localagnent-gnome-mcp.pid
-  echo "$pid" >"$pid_file"
-  pid_files+=("$pid_file")
-}
-
-start_x11_proxy() {
-  require_command socat
-
-  local proxy_num host_num proxy_socket host_socket
-  proxy_num="$(display_number "$X11_PROXY_DISPLAY")"
-  host_num="$(display_number "$HOST_DISPLAY")"
-  proxy_socket="/tmp/.X11-unix/X$proxy_num"
-  host_socket="/tmp/.X11-unix/X$host_num"
-
-  if [[ -z "$proxy_num" || -z "$host_num" ]]; then
-    echo "Unable to parse DISPLAY values: DISPLAY=$HOST_DISPLAY AGENT_X11_DISPLAY=$X11_PROXY_DISPLAY" >&2
-    exit 1
-  fi
-
-  if [[ "$proxy_num" == "$host_num" ]]; then
-    echo "AGENT_X11_DISPLAY equals DISPLAY ($X11_PROXY_DISPLAY); using direct display without proxy"
-    return
-  fi
-
-  mkdir -p /tmp/.X11-unix
-
-  if [[ -S "$proxy_socket" ]]; then
-    rm -f "$proxy_socket"
-  fi
-
-  echo "Starting X11 proxy $X11_PROXY_DISPLAY -> $HOST_DISPLAY"
-  nohup socat \
-    "UNIX-LISTEN:$proxy_socket,fork,mode=777" \
-    "ABSTRACT-CONNECT:$host_socket" \
-    >/tmp/localagnent-x11-proxy.log 2>&1 &
-
-  local pid=$!
-  local pid_file=/tmp/localagnent-x11-proxy.pid
-  echo "$pid" >"$pid_file"
-  pid_files+=("$pid_file")
 }
 
 check_unsafe_mode() {
@@ -137,99 +70,17 @@ check_unsafe_mode() {
   fi
 
   echo "GNOME Shell unsafe mode: disabled"
-  echo "Window listing and basic X11 actions will use the Docker X11 fallback."
+  echo "Window listing and basic X11 actions will use the host X11 fallback when available."
   echo "For full upstream GNOME Shell window control, enable unsafe mode manually:"
   echo "  Alt+F2 -> lg -> global.context.unsafe_mode = true"
 }
 
-start_screenshot_sync() {
-  require_command node
-
-  local screenshot_dir="$HOST_WORKSPACE_DIR/screenshots"
-  mkdir -p "$screenshot_dir"
-  if [[ ! -w "$screenshot_dir" ]]; then
-    chmod u+rwx "$screenshot_dir" 2>/dev/null || true
-  fi
-  if [[ ! -w "$screenshot_dir" ]] && rmdir "$screenshot_dir" 2>/dev/null; then
-    mkdir -p "$screenshot_dir"
-  fi
-  if [[ ! -w "$screenshot_dir" ]]; then
-    echo "Screenshot sync directory is not writable: $screenshot_dir" >&2
-    echo "Fix ownership with: sudo chown -R $(id -un):$(id -gn) '$screenshot_dir'" >&2
-    exit 1
-  fi
-
-  echo "Starting screenshot sync $HOST_PICTURES_DIR -> $screenshot_dir"
-  HOST_PICTURES_DIR="$HOST_PICTURES_DIR" \
-    HOST_WORKSPACE_DIR="$HOST_WORKSPACE_DIR" \
-    nohup node - <<'NODE' >/tmp/localagnent-screenshot-sync.log 2>&1 &
-const fs = require('node:fs');
-const path = require('node:path');
-
-const sourceRoot = process.env.HOST_PICTURES_DIR;
-const workspaceDir = path.join(process.env.HOST_WORKSPACE_DIR, 'screenshots');
-const copied = new Set();
-
-function isImage(name) {
-  return /\.(png|jpe?g|webp)$/i.test(name);
-}
-
-function copyIfReady(sourceDir, name) {
-  if (!sourceDir || !isImage(name)) return;
-  const source = path.join(sourceDir, name);
-  const target = path.join(workspaceDir, name);
-  fs.stat(source, (statErr, firstStat) => {
-    if (statErr || !firstStat.isFile()) return;
-    setTimeout(() => {
-      fs.stat(source, (secondErr, secondStat) => {
-        if (secondErr || !secondStat.isFile()) return;
-        if (firstStat.size !== secondStat.size) return copyIfReady(sourceDir, name);
-        const key = `${name}:${secondStat.mtimeMs}:${secondStat.size}`;
-        if (copied.has(key)) return;
-        fs.copyFile(source, target, (copyErr) => {
-          if (copyErr) {
-            console.error(`copy failed ${source} -> ${target}:`, copyErr.message);
-            return;
-          }
-          copied.add(key);
-          console.log(`copied ${source} -> ${target}`);
-        });
-      });
-    }, 300);
-  });
-}
-
-fs.mkdirSync(workspaceDir, { recursive: true });
-const sourceDirs = [sourceRoot, path.join(sourceRoot, 'Screenshots')].filter((dir, index, arr) => (
-  dir && arr.indexOf(dir) === index && fs.existsSync(dir) && fs.statSync(dir).isDirectory()
-));
-
-for (const sourceDir of sourceDirs) {
-  for (const name of fs.readdirSync(sourceDir).filter(isImage)) {
-    copyIfReady(sourceDir, name);
-  }
-  fs.watch(sourceDir, (_event, name) => {
-    if (typeof name === 'string') copyIfReady(sourceDir, name);
-  });
-}
-setInterval(() => {}, 60_000);
-NODE
-
-  local pid=$!
-  local pid_file=/tmp/localagnent-screenshot-sync.pid
-  echo "$pid" >"$pid_file"
-  pid_files+=("$pid_file")
-}
-
 main() {
   require_command docker
-  require_command node
+  ensure_workspace_dir
 
   case "$MODE" in
     dev|prod)
-      start_gnome_bridge
-      start_x11_proxy
-      start_screenshot_sync
       check_unsafe_mode
       ;;
     infra)
@@ -245,16 +96,16 @@ main() {
 
   case "$MODE" in
     dev)
-      echo "Starting Docker Compose dev stack"
-      AGENT_X11_DISPLAY="$X11_PROXY_DISPLAY" docker compose --profile dev up "$@"
+      echo "Starting Docker Compose infra + sandbox stack"
+      AGENT_WORKSPACE="$HOST_WORKSPACE_DIR" docker compose up agent_app postgres neo4j scrapling-mcp cognee "$@"
       ;;
     prod)
-      echo "Starting Docker Compose prod stack"
-      AGENT_X11_DISPLAY="$X11_PROXY_DISPLAY" docker compose --profile prod up --build "$@"
+      echo "Starting Docker Compose infra + sandbox stack"
+      AGENT_WORKSPACE="$HOST_WORKSPACE_DIR" docker compose up --build agent_app postgres neo4j scrapling-mcp cognee "$@"
       ;;
     infra)
       echo "Starting Docker Compose infrastructure stack"
-      docker compose up postgres neo4j scrapling-mcp cognee "$@"
+      AGENT_WORKSPACE="$HOST_WORKSPACE_DIR" docker compose up agent_app postgres neo4j scrapling-mcp cognee "$@"
       ;;
   esac
 }

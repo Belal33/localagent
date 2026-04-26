@@ -30,7 +30,7 @@ export async function fallbackWindowManagement(
 ): Promise<string> {
     const display = getX11Display();
     if (!display) {
-        return "GNOME window management requires either GNOME Shell unsafe mode or an X11 DISPLAY inside the container.";
+        return "GNOME window management requires either GNOME Shell unsafe mode or an X11 DISPLAY on the host.";
     }
 
     try {
@@ -397,7 +397,7 @@ function formatCommandError(
 ): string {
     const details = stderr.trim() || error.message;
     const hint = /ENOENT|not found/i.test(error.message)
-        ? " Install wmctrl, xdotool, and x11-utils, or rebuild the app container."
+        ? " Install wmctrl, xdotool, and x11-utils on the host."
         : "";
     return `Command failed: ${command} ${args.join(" ")}. ${details}${hint}`;
 }

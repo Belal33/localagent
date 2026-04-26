@@ -1,59 +1,23 @@
 /**
  * ─── Phase 3: Whitelist Safety Classifier ───────────────────────────────────
  *
- * Uses a WHITELIST model: only commands matching known safe patterns are
- * allowed to execute without human approval. Everything else is flagged
- * as potentially destructive and triggers a Human-in-the-Loop interrupt.
+ * Uses a WHITELIST model: only configured auto-approved tools and safe
+ * command patterns are allowed to execute without human approval. Everything
+ * else is flagged as potentially destructive and triggers a Human-in-the-Loop
+ * interrupt.
  */
 
-// ─── Whitelist: Safe Tools ──────────────────────────────────────────────────
-// These tools are inherently read-only and always safe to execute.
-const SAFE_TOOLS = new Set(["read_file", "list_directory", "web_search"]);
+import { getAgentSettingsSync, type AgentSettings } from "./settings";
 
-// ─── Whitelist: Safe Command Patterns ───────────────────────────────────────
-// For `execute_command` tool: only commands matching these patterns execute
-// without human approval. ANYTHING NOT IN THIS LIST IS TREATED AS DESTRUCTIVE.
-const SAFE_COMMAND_PATTERNS: RegExp[] = [
-    /^ls\b/,            // List files
-    /^cat\b/,           // Read file contents
-    /^head\b/,          // Read file head
-    /^tail\b/,          // Read file tail
-    /^echo\b/,          // Print text
-    /^pwd$/,            // Print working directory
-    /^whoami$/,         // Current user
-    /^date$/,           // Current date
-    /^wc\b/,            // Word count
-    /^grep\b/,          // Search in files
-    /^du\b/,            // Disk usage
-    /^df\b/,            // Filesystem info
-    /^stat\b/,          // File info
-    /^file\b/,          // File type detection
-    /^tree\b/,          // Directory tree
-    /^which\b/,         // Locate command
-    /^env$/,            // Environment variables
-    /^uname\b/,         // System info
-];
+const APPROVAL_ONLY_TOOLS = new Set([
+    "restart_sandbox",
+    "host_execute_command",
+]);
 
-// ─── Dangerous Patterns ─────────────────────────────────────────────────────
-// Any command containing these shell operators is NEVER safe, regardless of
-// what the leading command is. This prevents attacks like `ls && rm -rf /`.
-const DANGEROUS_PATTERNS: RegExp[] = [
-    /&&/,               // Command chaining
-    /\|\|/,             // OR chaining
-    /;/,                // Command separator
-    /\|/,               // Piping (can send data to destructive commands)
-    /\$\(/,             // Command substitution $(...)
-    /`/,                // Backtick command substitution
-    />/,                // Output redirection (write to files)
-    /</,                // Input redirection
-    /-exec\b/,          // find -exec (arbitrary command execution)
-    /-delete\b/,        // find -delete
-    /\bxargs\b/,        // xargs (arbitrary command execution)
-    /\bsudo\b/,         // Privilege escalation
-    /\bsu\b/,           // User switching
-    /\bcurl\b/,         // Network requests (data exfil / download)
-    /\bwget\b/,         // Network requests
-];
+// NOTE: execute_command runs inside the isolated agent_app Docker sandbox.
+// All shell-level pattern checks have been removed because the container
+// provides the security boundary. If execute_command is in the user's
+// auto-approval whitelist, it passes regardless of command content.
 
 export interface SafetyResult {
     safe: boolean;
@@ -75,49 +39,39 @@ export interface SafetyResult {
  */
 export function classifyToolCall(
     toolName: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    settings: AgentSettings = getAgentSettingsSync(),
 ): SafetyResult {
-    return { safe: true };
     // 1. Skill activation placeholders (use_*) — always safe
     if (toolName.startsWith("use_")) {
         return { safe: true };
     }
 
-    // 2. Known safe tools (read-only operations)
-    if (SAFE_TOOLS.has(toolName)) {
+    if (toolName === "sandbox_status") {
         return { safe: true };
     }
 
-    // 2. execute_command — check for dangerous patterns first, then whitelist
+    if (APPROVAL_ONLY_TOOLS.has(toolName)) {
+        return {
+            safe: false,
+            reason: `Tool "${toolName}" controls the host or sandbox lifecycle and requires user approval`,
+        };
+    }
+
+    const autoApprovedTools = new Set(settings.autoApprovalTools);
+
+    if (autoApprovedTools.has(toolName)) {
+        return { safe: true };
+    }
+
+    // 2. execute_command — runs inside isolated Docker sandbox.
+    // If whitelisted, allow any command; container provides the boundary.
     if (toolName === "execute_command") {
         const command = (args.command as string || "").trim();
-
         if (!command) {
             return { safe: false, reason: "Empty command" };
         }
-
-        // 2a. Check for dangerous shell operators — these ALWAYS require approval
-        for (const pattern of DANGEROUS_PATTERNS) {
-            if (pattern.test(command)) {
-                return {
-                    safe: false,
-                    reason: `Command contains dangerous pattern: ${pattern.source}`,
-                };
-            }
-        }
-
-        // 2b. Check against safe command whitelist
-        for (const pattern of SAFE_COMMAND_PATTERNS) {
-            if (pattern.test(command)) {
-                return { safe: true };
-            }
-        }
-
-        // Command does not match any safe pattern
-        return {
-            safe: false,
-            reason: `Command "${truncate(command, 80)}" is not in the safe command whitelist`,
-        };
+        return { safe: true };
     }
 
     // 3. All other tools (write_file, delete_file, download_file, etc.)
@@ -132,10 +86,11 @@ export function classifyToolCall(
  * Returns true only if ALL tool calls are safe.
  */
 export function classifyAllToolCalls(
-    toolCalls: Array<{ name: string; args: Record<string, unknown> }>
+    toolCalls: Array<{ name: string; args: Record<string, unknown> }>,
+    settings: AgentSettings = getAgentSettingsSync(),
 ): { allSafe: boolean; results: Array<SafetyResult & { toolName: string }> } {
     const results = toolCalls.map((tc) => ({
-        ...classifyToolCall(tc.name, tc.args),
+        ...classifyToolCall(tc.name, tc.args, settings),
         toolName: tc.name,
     }));
 

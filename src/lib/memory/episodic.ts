@@ -7,11 +7,12 @@
  */
 import { Pool } from "pg";
 import { generateEmbedding } from "./embeddings";
+import { localizeDockerServiceUri } from "@/lib/local-runtime";
 
 const pool = new Pool({
     connectionString:
-        process.env.AGENT_PG_URI ??
-        "postgresql://agent:agent_local_dev@postgres:5432/agent_memory",
+        localizeDockerServiceUri(process.env.AGENT_PG_URI ??
+            "postgresql://agent:agent_local_dev@postgres:5432/agent_memory"),
 });
 
 export interface EpisodicMemory {

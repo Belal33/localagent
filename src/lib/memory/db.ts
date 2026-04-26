@@ -8,13 +8,14 @@
  */
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import neo4j, { type Driver } from "neo4j-driver";
+import { localizeDockerServiceUri } from "@/lib/local-runtime";
 
 // ─── Configuration (env vars with local dev defaults) ────────────────────────
 const PG_URI =
-    process.env.AGENT_PG_URI ??
-    "postgresql://agent:agent_local_dev@postgres:5432/agent_memory";
+    localizeDockerServiceUri(process.env.AGENT_PG_URI ??
+        "postgresql://agent:agent_local_dev@postgres:5432/agent_memory");
 
-const NEO4J_URI = process.env.AGENT_NEO4J_URI ?? "bolt://neo4j:7687";
+const NEO4J_URI = localizeDockerServiceUri(process.env.AGENT_NEO4J_URI ?? "bolt://neo4j:7687");
 const NEO4J_USER = process.env.AGENT_NEO4J_USER ?? "neo4j";
 const NEO4J_PASS = process.env.AGENT_NEO4J_PASS ?? "agent_local_dev";
 

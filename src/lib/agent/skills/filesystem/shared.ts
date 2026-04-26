@@ -1,10 +1,10 @@
-import { exec } from "child_process";
-import { promisify } from "util";
-
-const execAsync = promisify(exec);
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+import { getWorkspaceRoot } from "@/lib/workspace-root";
 
 // ─── Workspace Configuration ────────────────────────────────────────────────
-export const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/workspace";
+export const WORKSPACE_ROOT = getWorkspaceRoot();
+const AGENT_WORKSPACE = process.env.AGENT_WORKSPACE ? resolve(process.env.AGENT_WORKSPACE) : undefined;
 
 /**
  * Sanitise a user-supplied path so it is always relative to WORKSPACE_ROOT.
@@ -13,35 +13,57 @@ export const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/workspace";
  */
 export function sanitizePath(raw: string): string {
     let p = raw.trim();
-    // Strip leading workspace prefix (with or without leading slash)
-    const prefix = WORKSPACE_ROOT.replace(/^\//, ""); // "workspace"
-    const re = new RegExp(`^/?${prefix}/?`);
-    p = p.replace(re, "");
-    // Collapse any leading slashes and default to "."
+    const workspaceName = WORKSPACE_ROOT.split("/").filter(Boolean).at(-1) ?? "workspace";
+    const runtimeWorkspace = process.env.AGENT_RUNTIME_WORKSPACE ?? "/workspace";
+
+    for (const prefix of [WORKSPACE_ROOT, AGENT_WORKSPACE, runtimeWorkspace, workspaceName].filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+    )) {
+        const normalized = prefix.replace(/^\/+|\/+$/g, "");
+        if (!normalized) continue;
+        p = p.replace(new RegExp(`^/?${escapeRegExp(normalized)}/?`), "");
+    }
+
     p = p.replace(/^\/+/, "") || ".";
     return p;
 }
 
-/**
- * Runs a command in the workspace and returns stdout.
- */
-export async function runAs(command: string): Promise<string> {
-    const { stdout } = await execAsync(command, {
-        cwd: WORKSPACE_ROOT,
-        timeout: 10_000,
-    });
-    return stdout;
+export function resolveWorkspacePath(raw: string): string {
+    const fullPath = resolve(join(WORKSPACE_ROOT, sanitizePath(raw)));
+    const rel = relative(WORKSPACE_ROOT, fullPath);
+    if (rel.startsWith("..") || rel === ".." || rel.startsWith("/")) {
+        throw new Error("Path escapes workspace root");
+    }
+    return fullPath;
 }
 
-/**
- * Runs a command in the workspace with a custom timeout and returns { stdout, stderr }.
- */
-export async function runAsWithTimeout(
-    command: string,
-    timeoutMs: number
-): Promise<{ stdout: string; stderr: string }> {
-    return execAsync(command, {
-        cwd: WORKSPACE_ROOT,
-        timeout: timeoutMs,
-    });
+export async function readWorkspaceFile(path: string): Promise<string> {
+    return readFile(resolveWorkspacePath(path), "utf8");
+}
+
+export async function writeWorkspaceFile(path: string, content: string): Promise<string> {
+    const fullPath = resolveWorkspacePath(path);
+    await mkdir(dirname(fullPath), { recursive: true });
+    await writeFile(fullPath, content, "utf8");
+    return fullPath;
+}
+
+export async function deleteWorkspaceFile(path: string): Promise<string> {
+    const fullPath = resolveWorkspacePath(path);
+    await rm(fullPath, { force: false });
+    return fullPath;
+}
+
+export async function ensureWorkspaceParent(path: string): Promise<string> {
+    const fullPath = resolveWorkspacePath(path);
+    await mkdir(dirname(fullPath), { recursive: true });
+    return fullPath;
+}
+
+export async function workspaceFileSize(path: string): Promise<number> {
+    return (await stat(resolveWorkspacePath(path))).size;
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

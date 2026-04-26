@@ -1,6 +1,6 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { WORKSPACE_ROOT, sanitizePath, runAs } from "./shared";
+import { WORKSPACE_ROOT, writeWorkspaceFile } from "./shared";
 
 const writeFile = new DynamicStructuredTool({
     name: "write_file",
@@ -11,13 +11,10 @@ const writeFile = new DynamicStructuredTool({
     }),
     func: async ({ path: filePath, content }) => {
         try {
-            const fullPath = `${WORKSPACE_ROOT}/${sanitizePath(filePath)}`;
-            // Base64-encode content in Node to avoid all shell quoting issues
-            const b64 = Buffer.from(content).toString("base64");
-            await runAs(`mkdir -p "$(dirname '${fullPath}')" && echo '${b64}' | base64 -d > '${fullPath}'`);
+            const fullPath = await writeWorkspaceFile(filePath, content);
             return `File written: ${fullPath}`;
-        } catch (error: any) {
-            return `Error writing file: ${error.message}`;
+        } catch (error) {
+            return `Error writing file: ${error instanceof Error ? error.message : String(error)}`;
         }
     },
 });

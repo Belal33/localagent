@@ -1,6 +1,6 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { WORKSPACE_ROOT, sanitizePath, runAs } from "./shared";
+import { WORKSPACE_ROOT, deleteWorkspaceFile } from "./shared";
 
 const deleteFile = new DynamicStructuredTool({
     name: "delete_file",
@@ -10,11 +10,10 @@ const deleteFile = new DynamicStructuredTool({
     }),
     func: async ({ path: filePath }) => {
         try {
-            const safePath = sanitizePath(filePath);
-            await runAs(`rm '${WORKSPACE_ROOT}/${safePath}'`);
-            return `Deleted: ${WORKSPACE_ROOT}/${safePath}`;
-        } catch (error: any) {
-            return `Error deleting file: ${error.message}`;
+            const fullPath = await deleteWorkspaceFile(filePath);
+            return `Deleted: ${fullPath}`;
+        } catch (error) {
+            return `Error deleting file: ${error instanceof Error ? error.message : String(error)}`;
         }
     },
 });

@@ -1,6 +1,6 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { WORKSPACE_ROOT, sanitizePath, runAs } from "./shared";
+import { WORKSPACE_ROOT, readWorkspaceFile } from "./shared";
 
 const readFile = new DynamicStructuredTool({
     name: "read_file",
@@ -10,10 +10,9 @@ const readFile = new DynamicStructuredTool({
     }),
     func: async ({ path: filePath }) => {
         try {
-            const safePath = sanitizePath(filePath);
-            return await runAs(`cat '${WORKSPACE_ROOT}/${safePath}'`);
-        } catch (error: any) {
-            return `Error reading file: ${error.message}`;
+            return await readWorkspaceFile(filePath);
+        } catch (error) {
+            return `Error reading file: ${error instanceof Error ? error.message : String(error)}`;
         }
     },
 });

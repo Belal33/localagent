@@ -2,13 +2,10 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { callGnomeTool, callGnomeToolWithFallback } from "./shared";
 import { fallbackWindowManagement } from "./window-x11";
-import { basename, join } from "node:path";
-import { stat } from "node:fs/promises";
-import { SCREENSHOT_ARTIFACT_DIR, screenshotArtifactUrl } from "../../screenshot-artifacts";
+import { basename } from "node:path";
+import { screenshotArtifactName, screenshotArtifactUrl } from "../../screenshot-artifacts";
 
 const booleanLike = z.union([z.boolean(), z.string(), z.number()]);
-const SCREENSHOT_SYNC_TIMEOUT_MS = 5_000;
-const SCREENSHOT_SYNC_POLL_MS = 100;
 
 /**
  * Normalize anything an LLM might emit into a real JSON boolean.
@@ -168,36 +165,16 @@ const gnomeTakeScreenshot = new DynamicStructuredTool({
             ...(interactiveBool !== undefined && { interactive: interactiveBool }),
         });
 
-        return copyScreenshotToWorkspace(result);
+        return exposeScreenshot(result);
     },
 });
 
-async function copyScreenshotToWorkspace(result: string): Promise<string> {
+function exposeScreenshot(result: string): string {
     const hostPath = extractScreenshotPath(result);
     if (!hostPath) return result;
 
-    const fileName = basename(hostPath);
-    const workspacePath = join(SCREENSHOT_ARTIFACT_DIR, fileName);
-    const synced = await waitForFile(workspacePath, SCREENSHOT_SYNC_TIMEOUT_MS);
-    if (synced) {
-        return `${result}\nScreenshot available for vision inspection: ${workspacePath}\nScreenshot available in client: ${screenshotArtifactUrl(fileName)}`;
-    }
-
-    return `${result}\nScreenshot sync target for vision inspection: ${workspacePath}\nThe file was not visible in the workspace within ${SCREENSHOT_SYNC_TIMEOUT_MS}ms; ask the user to confirm the screenshot sync helper is running via npm run dev:full/prod:full.`;
-}
-
-async function waitForFile(path: string, timeoutMs: number): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        try {
-            const info = await stat(path);
-            if (info.isFile() && info.size > 0) return true;
-        } catch {
-            // Keep polling until the host-side screenshot sync catches up.
-        }
-        await new Promise((resolve) => setTimeout(resolve, SCREENSHOT_SYNC_POLL_MS));
-    }
-    return false;
+    const artifactName = screenshotArtifactName(hostPath);
+    return `${result}\nScreenshot available for vision inspection: ${hostPath}\nScreenshot available in client: ${screenshotArtifactUrl(artifactName)}\nScreenshot file: ${basename(hostPath)}`;
 }
 
 function extractScreenshotPath(result: string): string | null {

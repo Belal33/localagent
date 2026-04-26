@@ -1,15 +1,17 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { isRunningInDocker } from "@/lib/local-runtime";
 
-// The GNOME MCP server must run on the Ubuntu host so it can reach the user's
-// GNOME session bus. A host-side stdio->HTTP bridge exposes it to Docker.
+const GNOME_MCP_COMMAND =
+    process.env.GNOME_MCP_COMMAND ?? `${process.env.HOME ?? ""}/.cargo/bin/gnome-mcp-server`;
 const GNOME_MCP_URL =
     process.env.GNOME_MCP_URL ?? "http://host.docker.internal:8930/mcp";
 
 const DEBUG = process.env.GNOME_MCP_DEBUG === "true";
 
 export function getGnomeMcpUrl(): string {
-    return GNOME_MCP_URL;
+    return isRunningInDocker() ? GNOME_MCP_URL : `stdio:${GNOME_MCP_COMMAND}`;
 }
 
 function log(...args: unknown[]) {
@@ -63,7 +65,9 @@ export async function callGnomeTool(
     log("→ callTool", toolName, JSON.stringify(sanitizedArgs));
 
     const client = new Client({ name: "localagent-gnome", version: "1.0.0" });
-    const transport = new StreamableHTTPClientTransport(new URL(GNOME_MCP_URL));
+    const transport = isRunningInDocker()
+        ? new StreamableHTTPClientTransport(new URL(GNOME_MCP_URL))
+        : new StdioClientTransport({ command: GNOME_MCP_COMMAND });
 
     await client.connect(transport);
 

@@ -17,6 +17,7 @@ import {
   getToolsForState,
   getAllPossibleTools,
   getSkillNameFromPlaceholder,
+  getEnabledToolNames,
 } from "./skills";
 import { AgentAnnotation } from "./state";
 import { humanReviewNode } from "./nodes/human-review";
@@ -26,6 +27,7 @@ import { replanNode } from "./nodes/replan";
 import { classifierNode } from "./nodes/classifier";
 import { memoryRetrievalNode } from "./nodes/memory-retrieval";
 import { getCheckpointer } from "@/lib/memory/db";
+import { DEFAULT_SYSTEM_MESSAGE, getAgentSettingsSync } from "./settings";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
@@ -147,23 +149,11 @@ function messageHasImageContent(message: BaseMessage): boolean {
 }
 
 // ─── Register ALL possible tools (for ToolNode execution) ───────────────────
-const allTools = getAllPossibleTools();
+const allTools = getAllPossibleTools({ respectSettings: false });
 console.log(
   `[Agent Graph] Registered ${allTools.length} total tools:`,
   allTools.map((t) => t.name).join(", ")
 );
-
-// ─── System Prompt ──────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = new SystemMessage(
-  "You are a highly capable autonomous AI agent running natively on an Ubuntu Linux system. " +
-  "You have access to tools for terminal execution and web search. " +
-  "Additional capabilities are available as skills you can activate by calling use_<skill> tools. " +
-  "Destructive operations require human approval before execution. " +
-  "For complex tasks, a plan is created before executing. " +
-  "Use your tools proactively to accomplish tasks. " +
-  "Be concise, helpful, and precise."
-);
-
 
 // ─── Extended State (adds classification field for routing) ─────────────────
 const GraphAnnotation = Annotation.Root({
@@ -177,16 +167,17 @@ const GraphAnnotation = Annotation.Root({
 // ─── Agent Node (dynamic tool binding based on active skills) ───────────────
 async function callModel(state: typeof GraphAnnotation.State, config: RunnableConfig) {
   const { messages, activeSkills, memoryContextText, plan, currentStep, pastSteps } = state;
+  const settings = getAgentSettingsSync();
   const requestedChatModel = (config?.configurable as Record<string, string> | undefined)?.chatModel;
   const hasScreenshotImage = messages.some(messageHasImageContent);
   const chatModel = hasScreenshotImage && !isMultimodalModel(requestedChatModel)
     ? DEFAULT_VISION_MODEL
     : requestedChatModel;
-  const currentTools = getToolsForState(activeSkills);
+  const currentTools = getToolsForState(activeSkills, settings);
   const llmWithTools = getLLM(chatModel).bindTools(currentTools);
 
   // Build system prompt — merge memory context + (if planning) step focus.
-  const parts: string[] = [String(SYSTEM_PROMPT.content)];
+  const parts: string[] = [settings.systemMessage || DEFAULT_SYSTEM_MESSAGE];
 
   if (memoryContextText) {
     parts.push(memoryContextText);
@@ -359,13 +350,26 @@ async function appendScreenshotImageMessages(
 async function toolsWithActivation(state: typeof GraphAnnotation.State) {
   const lastMsg = state.messages[state.messages.length - 1] as AIMessage;
   const toolCalls = lastMsg.tool_calls ?? [];
+  const settings = getAgentSettingsSync();
 
   console.log(`[Tools] ▶ ENTRY — ${toolCalls.length} tool call(s): ${toolCalls.map(tc => `${tc.name}(${JSON.stringify(tc.args).slice(0, 80)})`).join(", ")}`);
+
+  const enabledToolNames = getEnabledToolNames(settings);
+  const disabledCalls = toolCalls.filter((tc) => !enabledToolNames.has(tc.name));
+  if (disabledCalls.length > 0) {
+    return {
+      messages: disabledCalls.map((tc) => new ToolMessage({
+        tool_call_id: tc.id ?? "unknown",
+        name: tc.name,
+        content: `Tool "${tc.name}" is disabled in agent settings and was not executed.`,
+      })),
+    };
+  }
 
   // Detect any skill activation calls
   const activatedSkills: string[] = [];
   for (const tc of toolCalls) {
-    const skillName = getSkillNameFromPlaceholder(tc.name);
+    const skillName = getSkillNameFromPlaceholder(tc.name, settings);
     if (skillName) {
       activatedSkills.push(skillName);
     }

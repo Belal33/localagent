@@ -1,6 +1,7 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { WORKSPACE_ROOT, sanitizePath, runAs } from "./shared";
+import { readdir } from "node:fs/promises";
+import { WORKSPACE_ROOT, resolveWorkspacePath } from "./shared";
 
 const listDirectory = new DynamicStructuredTool({
     name: "list_directory",
@@ -10,11 +11,14 @@ const listDirectory = new DynamicStructuredTool({
     }),
     func: async ({ path: dirPath }) => {
         try {
-            const safePath = sanitizePath(dirPath);
-            const output = await runAs(`ls -la '${WORKSPACE_ROOT}/${safePath}'`);
+            const fullPath = resolveWorkspacePath(dirPath);
+            const entries = await readdir(fullPath, { withFileTypes: true });
+            const output = entries
+                .map((entry) => `${entry.isDirectory() ? "d" : "-"} ${entry.name}${entry.isDirectory() ? "/" : ""}`)
+                .join("\n");
             return output || "(empty directory)";
-        } catch (error: any) {
-            return `Error listing directory: ${error.message}`;
+        } catch (error) {
+            return `Error listing directory: ${error instanceof Error ? error.message : String(error)}`;
         }
     },
 });
